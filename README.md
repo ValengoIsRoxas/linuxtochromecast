@@ -1,4 +1,4 @@
-# linuxtochromecast
+# LTC: linuxtochromecast
 
 Cast a video to your Chromecast with subtitles already working, in one command:
 
@@ -9,6 +9,10 @@ ltc movie.mkv
 That's it. It finds the Chromecast, picks up the subtitles (embedded or the
 `.srt` sitting next to the file), works out whether anything needs converting,
 and starts playing.
+
+Bring whatever format you already have. ffmpeg does the reading, so a file it
+can't open is rare, and anything the Chromecast can't play gets converted on the
+fly.
 
 > The command-line output and the web panel are currently in Spanish. Everything
 > else — flags, file names, this document — is in English.
@@ -68,8 +72,9 @@ While it runs, the terminal accepts:
 ### The web panel
 
 It also opens a control panel in your browser with the same controls. The
-address it prints on startup (`http://192.168.x.x:PORT`) **works from your
-phone** if it's on the same network, so it doubles as a remote control.
+address it prints on startup (`http://192.168.x.x:PORT`) even **works from your
+phone** if it's on the same network, so it doubles as a remote control — pretty
+useful.
 
 ---
 
