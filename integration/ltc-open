@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Lanza ltc desde el gestor de archivos.
+#
+# Si hay una terminal gráfica disponible la usa, así se ven los controles de
+# teclado y el estado. Si no, arranca en segundo plano y abre el panel web,
+# que tiene todo lo necesario incluido el botón para cerrar.
+
+set -euo pipefail
+
+FILE="${1:-}"
+if [[ -z "$FILE" ]]; then
+    echo "Uso: ltc-open ARCHIVO" >&2
+    exit 1
+fi
+
+LTC="$(command -v ltc || true)"
+if [[ -z "$LTC" ]]; then
+    for candidate in "$HOME/.local/bin/ltc" "/usr/local/bin/ltc"; do
+        [[ -x "$candidate" ]] && LTC="$candidate" && break
+    done
+fi
+
+notify() {
+    command -v notify-send >/dev/null 2>&1 && notify-send "Chromecast" "$1" || echo "$1" >&2
+}
+
+if [[ -z "$LTC" ]]; then
+    notify "No encuentro el comando 'ltc'. Corré install.sh de nuevo."
+    exit 1
+fi
+
+# Terminales ordenadas por probabilidad en un escritorio Linux actual.
+# La diferencia entre ellas es sólo cómo reciben el comando a ejecutar.
+try_terminal() {
+    local term args
+    for term in ptyxis gnome-terminal kgx konsole xfce4-terminal \
+                mate-terminal tilix kitty alacritty foot wezterm \
+                x-terminal-emulator xterm; do
+        command -v "$term" >/dev/null 2>&1 || continue
+        case "$term" in
+            konsole|xterm|alacritty|wezterm|x-terminal-emulator) args=(-e) ;;
+            kitty|foot)                                          args=() ;;
+            *)                                                   args=(--) ;;
+        esac
+        setsid "$term" "${args[@]}" "$LTC" "$FILE" >/dev/null 2>&1 &
+        return 0
+    done
+    return 1
+}
+
+if [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]] && try_terminal; then
+    exit 0
+fi
+
+# Sin terminal: modo silencioso. El panel web abre solo.
+notify "Preparando «$(basename "$FILE")»…"
+setsid "$LTC" "$FILE" >/dev/null 2>&1 &
+exit 0

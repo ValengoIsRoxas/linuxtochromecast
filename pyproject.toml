@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "linuxtochromecast"
+version = "1.0.0"
+description = "Castear video a un Chromecast con subtítulos, sin pelear con VLC"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "PyChromecast>=14.0",
+    "charset-normalizer>=3.0",
+]
+
+[project.scripts]
+ltc = "ltc.cli:main"
+
+[tool.setuptools]
+packages = ["ltc"]

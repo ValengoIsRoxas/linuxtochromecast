@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Service
+ServiceTypes=KonqPopupMenu/Plugin
+MimeType=video/mp4;video/x-matroska;video/x-msvideo;video/quicktime;video/webm;video/mpeg;video/x-ms-wmv;video/x-flv;video/3gpp;video/ogg;video/mp2t;video/x-m4v;
+Actions=castToChromecast
+X-KDE-Priority=TopLevel
+
+[Desktop Action castToChromecast]
+Name=Enviar a Chromecast
+Name[en]=Send to Chromecast
+Icon=video-display
+Exec=ltc-open %f

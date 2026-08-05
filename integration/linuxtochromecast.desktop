@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Enviar a Chromecast
+Name[en]=Send to Chromecast
+GenericName=Transmitir video con subtítulos
+Comment=Transmite este video al Chromecast con los subtítulos ya puestos
+Exec=ltc-open %f
+Icon=video-display
+Terminal=false
+Categories=AudioVideo;Video;Player;
+MimeType=video/mp4;video/x-matroska;video/x-msvideo;video/quicktime;video/webm;video/mpeg;video/x-ms-wmv;video/x-flv;video/3gpp;video/ogg;video/mp2t;video/x-m4v;
+NoDisplay=false

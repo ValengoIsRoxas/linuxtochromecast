@@ -1,0 +1,2 @@
+PyChromecast>=14.0
+charset-normalizer>=3.0
