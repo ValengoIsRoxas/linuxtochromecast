@@ -73,6 +73,14 @@ address it prints on startup (`http://192.168.x.x:PORT`) even **works from your
 phone** if it's on the same network, so it doubles as a remote control — pretty
 useful.
 
+<p>
+  <img src="docs/img/panel-mobile.png" alt="Web panel on a phone, subtitle sync sheet open" width="280">
+  <img src="docs/img/panel-desktop.png" alt="Web panel in a browser window" width="560">
+</p>
+
+Subtitle sync gets the most visual weight on purpose — it's the one thing VLC
+can't do. Nudge it in 0.1s or 0.5s steps, or tap the offset itself to reset it.
+
 ---
 
 ## How it decides what to do with the file
