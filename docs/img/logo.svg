@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 32 32">
+  <title>Transmitir a Linux</title>
+  <path d="M 5 14 L 5 9 A 2 2 0 0 1 7 7 L 25 7 A 2 2 0 0 1 27 9 L 27 23 A 2 2 0 0 1 25 25 L 15.5 25"
+        fill="none" stroke="#14161A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <g fill="none" stroke="#F5A623" stroke-width="2" stroke-linecap="round">
+    <path d="M 5.5 21 A 3.5 3.5 0 0 1 9 24.5"/>
+    <path d="M 5.5 18 A 6.5 6.5 0 0 1 12 24.5"/>
+  </g>
+  <circle cx="5.7" cy="24.3" r="1.2" fill="#F5A623"/>
+  <g transform="translate(13.4 8.5) scale(0.135)">
+    <ellipse cx="31" cy="102" rx="13" ry="6.5" transform="rotate(-20 31 102)" fill="#F5A623"/><ellipse cx="61" cy="102" rx="13" ry="6.5" transform="rotate(20 61 102)" fill="#F5A623"/>
+    <path d="M 46 4 C 57 4 66 13 66 26 C 66 35 65 40 65 45 C 65 50 79 57 82 70 C 85 86 70 100 46 100 C 22 100 7 86 10 70 C 13 57 27 50 27 45 C 27 40 26 35 26 26 C 26 13 35 4 46 4 Z" fill="#14161A"/>
+    <path d="M 46 56 C 55 56 63 65 63 77 C 63 88 55 94 46 94 C 37 94 29 88 29 77 C 29 65 37 56 46 56 Z" fill="#FFFFFF"/>
+    <path d="M 38 12.5 C 41.2 12.5 44 15.8 44 20 C 44 24.2 41.2 27.5 38 27.5 C 34.8 27.5 32 24.2 32 20 C 32 15.8 34.8 12.5 38 12.5 Z" fill="#FFFFFF"/>
+    <path d="M 54 12.5 C 57.2 12.5 60 15.8 60 20 C 60 24.2 57.2 27.5 54 27.5 C 50.8 27.5 48 24.2 48 20 C 48 15.8 50.8 12.5 54 12.5 Z" fill="#FFFFFF"/>
+    <path d="M 46 29 C 53 29 59 31.5 59 35 C 59 38.5 53 41 46 41 C 39 41 33 38.5 33 35 C 33 31.5 39 29 46 29 Z" fill="#F5A623"/>
+    <circle cx="39" cy="21.5" r="3" fill="#14161A"/><circle cx="53" cy="21.5" r="3" fill="#14161A"/>
+  </g>
+</svg>

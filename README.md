@@ -1,4 +1,8 @@
+<img src="docs/img/logo.svg" alt="" width="72" align="left">
+
 # LTC: linuxtochromecast
+
+<br clear="left">
 
 Cast a video to your Chromecast with subtitles already working, in one command:
 
