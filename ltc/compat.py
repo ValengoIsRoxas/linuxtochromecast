@@ -116,52 +116,52 @@ def plan_for(
 
     if caps.audio_only:
         raise ValueError(
-            f"'{caps.name}' es un dispositivo de sólo audio y no puede mostrar video."
+            f"'{caps.name}' is an audio-only device and can't display video."
         )
     if video is None:
-        raise ValueError("El archivo no tiene pista de video.")
+        raise ValueError("This file has no video stream.")
 
     # --- video ---
     video_ok = video.codec in caps.video
     if not video_ok:
-        reasons.append(f"video {video.codec} no soportado por {caps.name} → recodifico a H.264")
+        reasons.append(f"video {video.codec} not supported by {caps.name} → re-encoding to H.264")
     elif not _pixel_format_ok(video, caps):
         # El formato de píxeles es más confiable que el nombre del perfil, que
         # ffprobe escribe de formas distintas ("High 4:4:4 Predictive", "Hi444PP").
         detail = video.pix_fmt or video.profile or "desconocido"
         video_ok = False
-        reasons.append(f"formato de píxeles {detail} no soportado → recodifico a 8 bits 4:2:0")
+        reasons.append(f"pixel format {detail} not supported → re-encoding to 8-bit 4:2:0")
 
     scale_height = 0
     if video_ok and caps.max_height and video.height > caps.max_height:
         video_ok = False
         scale_height = caps.max_height
-        reasons.append(f"{video.height}p supera el máximo de {caps.name} ({caps.max_height}p) → reescalo")
+        reasons.append(f"{video.height}p exceeds the maximum for {caps.name} ({caps.max_height}p) → rescaling")
 
     if burn_sub is not None:
         video_ok = False
-        reasons.append(f"subtítulos '{burn_sub.label()}' son imagen → los quemo en el video")
+        reasons.append(f"subtitles '{burn_sub.label()}' are image-based → burning them into the video")
 
     # --- audio ---
     downmix = False
     if audio is None:
-        reasons.append("el archivo no tiene audio")
+        reasons.append("this file has no audio")
         audio_ok = True
     elif audio.codec not in caps.audio:
         audio_ok = False
-        reasons.append(f"audio {audio.codec} no soportado → convierto a AAC")
+        reasons.append(f"audio {audio.codec} not supported → converting to AAC")
         downmix = audio.channels > caps.max_audio_channels and not surround
         if downmix:
-            reasons.append(f"y bajo {audio.channels} canales a estéreo")
+            reasons.append(f"and downmixing {audio.channels} channels to stereo")
     elif audio.channels > caps.max_audio_channels and not surround:
         # El códec sirve pero la cantidad de canales no. Este es el caso que hace
         # que la película arranque y se corte a los pocos segundos.
         audio_ok = False
         downmix = True
         reasons.append(
-            f"audio {audio.codec} de {audio.channels} canales: {caps.name} sólo "
-            f"reproduce {caps.max_audio_channels} → bajo a estéreo "
-            f"(--surround para intentar mantenerlo)"
+            f"{audio.channels}-channel {audio.codec} audio: {caps.name} only plays "
+            f"{caps.max_audio_channels} → downmixing to stereo "
+            f"(--surround to try keeping it)"
         )
     else:
         audio_ok = True
@@ -173,25 +173,25 @@ def plan_for(
     # --- overrides del usuario ---
     if force == "transcode":
         video_ok = audio_ok = False
-        reasons.append("forzado por --transcode")
+        reasons.append("forced by --transcode")
     elif force == "direct":
         if not (video_ok and audio_ok and container_ok):
-            reasons.append("⚠ forzado por --direct: puede no reproducirse")
+            reasons.append("⚠ forced by --direct: may fail to play")
         video_ok = audio_ok = container_ok = True
         multi_audio = False
 
     # --- resolución final ---
     if video_ok and audio_ok and container_ok and not multi_audio:
         if not reasons:
-            reasons.append("contenedor y códecs ya compatibles → sin procesar")
+            reasons.append("container and codecs already compatible → no processing")
         return Plan("direct", "copy", "copy", _mime_for(media.container),
                     audio, None, 0, False, reasons)
 
     if video_ok and audio_ok:
         if multi_audio:
-            reasons.append(f"pista de audio '{audio.label()}' seleccionada → reempaqueto")
+            reasons.append(f"audio track '{audio.label()}' selected → remuxing")
         else:
-            reasons.append(f"contenedor {media.container.split(',')[0]} no soportado → reempaqueto a MP4 (sin recodificar)")
+            reasons.append(f"container {media.container.split(',')[0]} not supported → remuxing to MP4 (no re-encoding)")
         return Plan("remux", "copy", "copy", "video/mp4",
                     audio, None, 0, False, reasons)
 

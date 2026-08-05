@@ -80,7 +80,7 @@ def parse_time(value: str) -> float:
     try:
         nums = [float(p) for p in parts]
     except ValueError as exc:
-        raise argparse.ArgumentTypeError(f"Tiempo inválido: {value!r}") from exc
+        raise argparse.ArgumentTypeError(f"Invalid time: {value!r}") from exc
     total = 0.0
     for num in nums:
         total = total * 60 + num
@@ -92,53 +92,53 @@ def parse_time(value: str) -> float:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="ltc",
-        description="Castea un video a tu Chromecast con subtítulos, de una.",
+        description="Cast a video to your Chromecast with subtitles already working.",
         epilog=(
-            "Ejemplos:\n"
-            "  ltc pelicula.mkv                  castea con subtítulos en español\n"
-            "  ltc serie.mkv -s 2                usa la pista de subtítulos #2\n"
-            "  ltc pelicula.mp4 -d \"TV Living\"   elige el dispositivo\n"
-            "  ltc pelicula.mkv --list-tracks    muestra las pistas y sale\n"
+            "Examples:\n"
+            "  ltc movie.mkv                     cast, picking subtitles automatically\n"
+            "  ltc show.mkv -s 2                 use subtitle track #2\n"
+            "  ltc movie.mp4 -d \"TV Living\"      pick the device\n"
+            "  ltc movie.mkv --list-tracks       list the file's tracks and exit\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("video", nargs="?", help="Archivo de video a transmitir")
-    p.add_argument("-d", "--device", metavar="NOMBRE",
-                   help="Nombre del Chromecast (alcanza una parte), o su IP")
-    p.add_argument("-s", "--sub", metavar="N|ARCHIVO",
-                   help="Subtítulo a usar: el número que muestra --list-tracks, "
-                        "o directamente un archivo .srt/.ass")
-    p.add_argument("--no-subs", action="store_true", help="Arrancar sin subtítulos")
+    p.add_argument("video", nargs="?", help="Video file to cast")
+    p.add_argument("-d", "--device", metavar="NAME",
+                   help="Chromecast name (a partial match works), or its IP")
+    p.add_argument("-s", "--sub", metavar="N|FILE",
+                   help="Subtitle to use: the number shown by --list-tracks, "
+                        "or a .srt/.ass file directly")
+    p.add_argument("--no-subs", action="store_true", help="Start with subtitles off")
     p.add_argument("--burn", type=int, metavar="N",
-                   help="Quemar en el video la pista N (para subtítulos de imagen)")
-    p.add_argument("--sub-lang", default="spa", metavar="COD",
-                   help="Idioma preferido al elegir subtítulo solo (default: spa)")
+                   help="Burn track N into the video (for image-based subtitles)")
+    p.add_argument("--sub-lang", default="spa", metavar="CODE",
+                   help="Preferred language when auto-selecting a subtitle (default: spa)")
     p.add_argument("--sub-scale", type=float, default=1.0, metavar="F",
-                   help="Tamaño de los subtítulos, 1.0 = normal")
-    p.add_argument("--sub-encoding", metavar="COD",
-                   help="Forzar la codificación de los .srt externos (ej: cp1252, utf-8)")
-    p.add_argument("--delay", type=float, default=0.0, metavar="SEG",
-                   help="Desfase inicial de los subtítulos, en segundos")
+                   help="Subtitle size, 1.0 = normal")
+    p.add_argument("--sub-encoding", metavar="CODE",
+                   help="Force the encoding of external .srt files (e.g. cp1252, utf-8)")
+    p.add_argument("--delay", type=float, default=0.0, metavar="SECONDS",
+                   help="Initial subtitle offset, in seconds")
     p.add_argument("-a", "--audio", type=int, metavar="N",
-                   help="Número de pista de audio")
-    p.add_argument("-t", "--start", type=parse_time, default=0.0, metavar="TIEMPO",
-                   help="Arrancar en un punto: 90, 1:30 o 1:02:03")
+                   help="Audio track number")
+    p.add_argument("-t", "--start", type=parse_time, default=0.0, metavar="TIME",
+                   help="Start at a given point: 90, 1:30 or 1:02:03")
     p.add_argument("-p", "--port", type=int, default=0,
-                   help="Puerto del servidor local (default: uno libre)")
+                   help="Local server port (default: any free one)")
     p.add_argument("--transcode", action="store_true",
-                   help="Forzar recodificación aunque parezca compatible")
+                   help="Force re-encoding even if the file looks compatible")
     p.add_argument("--direct", action="store_true",
-                   help="Forzar reproducción directa sin pasar por ffmpeg")
+                   help="Force direct playback, bypassing ffmpeg")
     p.add_argument("--surround", action="store_true",
-                   help="No bajar el audio multicanal a estéreo")
+                   help="Don't downmix multichannel audio to stereo")
     p.add_argument("--no-browser", action="store_true",
-                   help="No abrir el panel web automáticamente")
+                   help="Don't open the web panel automatically")
     p.add_argument("--list-devices", action="store_true",
-                   help="Listar los Chromecast de la red y salir")
+                   help="List the Chromecasts on the network and exit")
     p.add_argument("--list-tracks", action="store_true",
-                   help="Listar las pistas del archivo y salir")
-    p.add_argument("--timeout", type=float, default=6.0, metavar="SEG",
-                   help="Tiempo de búsqueda de dispositivos")
+                   help="List the file's tracks and exit")
+    p.add_argument("--timeout", type=float, default=6.0, metavar="SECONDS",
+                   help="How long to search for devices")
     p.add_argument("-V", "--version", action="version", version=f"ltc {__version__}")
     return p
 
@@ -146,10 +146,10 @@ def build_parser() -> argparse.ArgumentParser:
 # --- listados -------------------------------------------------------------------
 
 def cmd_list_devices(timeout: float) -> int:
-    print(dim("Buscando Chromecasts…"))
+    print(dim("Looking for Chromecasts…"))
     devices = discover(timeout=timeout)
     if not devices:
-        print(yellow("No encontré ninguno. ¿Estás en la misma red Wi-Fi?"))
+        print(yellow("Found none. Are you on the same Wi-Fi network?"))
         return 1
     print()
     for d in devices:
@@ -172,10 +172,10 @@ def cmd_list_tracks(path: str, prefer: str = "spa") -> int:
 
     tracks = collect_tracks(media, prefer=prefer)
     if not tracks:
-        print(f"  {dim('subs    (ninguno)')}")
+        print(f"  {dim('subs    (none)')}")
     for t in tracks:
-        flag = red(" · no convertible, usá --burn") if t.bitmap else ""
-        origin = "embebido" if t.source == "embedded" else t.path.name
+        flag = red(" · not convertible, use --burn") if t.bitmap else ""
+        origin = "embedded" if t.source == "embedded" else t.path.name
         # Cuando la pista no declara idioma su etiqueta ya es el nombre del
         # archivo, así que no tiene sentido repetirlo.
         detail = t.label if t.label == origin else f"{t.label} · {dim(origin)}"
@@ -187,43 +187,43 @@ def cmd_list_tracks(path: str, prefer: str = "spa") -> int:
 # --- selección de dispositivo ---------------------------------------------------
 
 def choose_device(name: str | None, timeout: float):
-    progress(f"Consultando {name}…" if name and looks_like_host(name)
-             else "Buscando Chromecasts…")
+    progress(f"Querying {name}…" if name and looks_like_host(name)
+             else "Looking for Chromecasts…")
     devices = discover(timeout=timeout, name=name)
     clear_progress()
 
     if not devices:
         if name:
-            die(f"No encontré ningún Chromecast que coincida con «{name}». "
-                f"Probá con: ltc --list-devices")
-        die("No encontré ningún Chromecast en la red.\n"
-            "  Verificá que estés en la misma Wi-Fi y que el dispositivo esté prendido.")
+            die(f"Found no Chromecast matching \u00ab{name}\u00bb. "
+                f"Try: ltc --list-devices")
+        die("Found no Chromecast on the network.\n"
+            "  Check that you're on the same Wi-Fi and that the device is on.")
 
     playable = [d for d in devices if d.cast_type != "audio"]
     if not playable:
-        die("Sólo encontré dispositivos de audio, que no pueden mostrar video.")
+        die("Only found audio-only devices, which can't display video.")
 
     if len(playable) == 1:
         return playable[0]
 
-    print(f"\n{bold('Encontré varios Chromecast:')}\n")
+    print(f"\n{bold('Found several Chromecasts:')}\n")
     for i, d in enumerate(playable, 1):
         print(f"  {bold(str(i))}. {d.name}  {dim(d.model)}")
     print()
     while True:
         try:
-            answer = input("¿Cuál? [1] ").strip() or "1"
+            answer = input("Which one? [1] ").strip() or "1"
         except (EOFError, KeyboardInterrupt):
             sys.exit(130)
         if answer.isdigit() and 1 <= int(answer) <= len(playable):
             return playable[int(answer) - 1]
-        print(yellow("Número inválido."))
+        print(yellow("Invalid number."))
 
 
 # --- controles de teclado -------------------------------------------------------
 
-HELP = ("espacio pausa · ←/→ ±10s · ↓/↑ ±30s · j/k volumen · "
-        "s subtítulos · [ ] sincronía · m mudo · q salir")
+HELP = ("space pause · ←/→ ±10s · ↓/↑ ±30s · j/k volume · "
+        "s subtitles · [ ] sync · m mute · q quit")
 
 
 class Keyboard:
@@ -294,7 +294,7 @@ def render_status(session: Session, message: str = "") -> None:
     if session.sub_delay:
         sub_txt += f" {session.sub_delay:+.1f}s"
 
-    vol = f"{int(snap['volume'] * 100)}%" if not snap["muted"] else "mudo"
+    vol = f"{int(snap['volume'] * 100)}%" if not snap["muted"] else "muted"
     line = (f"  {icon} {bar} {pos}/{dur}  "
             f"{dim('vol')} {vol}  {dim('subs')} {sub_txt}")
     if message:
@@ -318,7 +318,7 @@ def control_loop(session: Session) -> None:
         while True:
             if session.quit_requested.is_set():
                 print()
-                print(dim("  Cerrado desde el panel web."))
+                print(dim("  Closed from the web panel."))
                 return
 
             key = kb.read(0.25)
@@ -349,16 +349,16 @@ def control_loop(session: Session) -> None:
                     session.cycle_subtitle()
                     active = next((t for t in session.usable_tracks()
                                    if t.id == session.active_sub), None)
-                    notify(f"subtítulos: {active.label if active else 'desactivados'}")
+                    notify(f"subtitles: {active.label if active else 'off'}")
                 elif key == "[":
                     session.nudge_delay(-0.1)
-                    notify(f"sincronía {session.sub_delay:+.1f}s")
+                    notify(f"sync {session.sub_delay:+.1f}s")
                 elif key == "]":
                     session.nudge_delay(0.1)
-                    notify(f"sincronía {session.sub_delay:+.1f}s")
+                    notify(f"sync {session.sub_delay:+.1f}s")
                 elif key == "0":
                     session.set_delay(0.0)
-                    notify("sincronía a cero")
+                    notify("sync reset to zero")
             except Exception as exc:
                 notify(f"error: {exc}")
 
@@ -370,8 +370,8 @@ def control_loop(session: Session) -> None:
                 reason = getattr(status, "idle_reason", None) if status else None
                 if reason in ("FINISHED", "CANCELLED", "ERROR"):
                     print()
-                    print(dim("  Reproducción terminada." if reason == "FINISHED"
-                              else f"  El receptor cortó ({reason})."))
+                    print(dim("  Playback finished." if reason == "FINISHED"
+                              else f"  The receiver stopped ({reason})."))
                     return
 
             render_status(session, message)
@@ -384,7 +384,7 @@ def run(args: argparse.Namespace) -> int:
 
     device = choose_device(args.device, args.timeout)
 
-    progress(f"Conectando a {device.name}…")
+    progress(f"Connecting to {device.name}…")
     try:
         caster = Caster(device)
     except CastError as exc:
@@ -397,7 +397,7 @@ def run(args: argparse.Namespace) -> int:
         tracks = collect_tracks(media, prefer=args.sub_lang)
         burn_track = next((t for t in tracks if t.id == args.burn), None)
         if burn_track is None:
-            die(f"No existe el subtítulo #{args.burn}. Mirá: ltc «archivo» --list-tracks")
+            die(f"There is no subtitle #{args.burn}. See: ltc \u00abfile\u00bb --list-tracks")
 
     # -s acepta tanto el número de pista como la ruta a un .srt.
     sub_choice, sub_file = None, None
@@ -407,13 +407,13 @@ def run(args: argparse.Namespace) -> int:
         else:
             sub_file = Path(args.sub).expanduser()
             if not sub_file.is_file():
-                die(f"No existe el archivo de subtítulos: {args.sub}")
+                die(f"No such subtitle file: {args.sub}")
 
     audio_stream = None
     if args.audio is not None:
         if not 0 <= args.audio < len(media.audio):
-            die(f"No existe la pista de audio #{args.audio}. "
-                f"El archivo tiene {len(media.audio)}.")
+            die(f"There is no audio track #{args.audio}. "
+                f"The file has {len(media.audio)}.")
         audio_stream = media.audio[args.audio]
 
     force = "transcode" if args.transcode else "direct" if args.direct else "auto"
@@ -450,7 +450,7 @@ def run(args: argparse.Namespace) -> int:
     try:
         session.start(args.start)
         if not caster.wait_for_session(timeout=25):
-            print(yellow("\n  El receptor tardó en responder; sigo esperando…"))
+            print(yellow("\n  The receiver is slow to respond; still waiting…"))
 
         if not args.no_browser and os.environ.get("DISPLAY", os.environ.get("WAYLAND_DISPLAY")):
             threading.Thread(
@@ -461,7 +461,7 @@ def run(args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         pass
     finally:
-        print("\n" + dim("  Cerrando…"))
+        print("\n" + dim("  Closing…"))
         try:
             session.stop()
             caster.quit_app()
@@ -483,10 +483,10 @@ def _print_summary(session: Session, device, panel_url: str) -> None:
     print(f"  {dim('→')} {bold(device.name)} {dim(f'({device.model})')}")
     print()
 
-    mode_label = {"direct": green("directo, sin procesar"),
-                  "remux": cyan("reempaquetado (sin recodificar)"),
-                  "transcode": yellow("transcodificando")}[plan.mode]
-    print(f"  {dim('modo')}   {mode_label}")
+    mode_label = {"direct": green("direct, no processing"),
+                  "remux": cyan("remuxed (no re-encoding)"),
+                  "transcode": yellow("transcoding")}[plan.mode]
+    print(f"  {dim('mode')}   {mode_label}")
     print(f"  {dim('video')}  {video.codec} {video.width}x{video.height}"
           + (f" → {plan.video_codec}" if plan.reencodes_video else ""))
     if plan.audio_stream:
@@ -500,12 +500,12 @@ def _print_summary(session: Session, device, panel_url: str) -> None:
     tracks = session.usable_tracks()
     print()
     if not tracks:
-        print(f"  {dim('subs')}   {dim('el archivo no trae subtítulos de texto')}")
+        print(f"  {dim('subs')}   {dim('this file has no text subtitles')}")
     for t in tracks:
-        active = green(" ← activo") if t.id == session.active_sub else ""
+        active = green(" ← active") if t.id == session.active_sub else ""
         print(f"  {dim('subs')}   {bold(f'[{t.id}]')} {t.label}{active}")
     if session.active_sub is None and tracks:
-        print(f"         {dim('ninguno activo — apretá s para elegir')}")
+        print(f"         {dim('none active — press s to pick one')}")
 
     print()
     print(f"  {dim('panel')}  {cyan(panel_url)}")

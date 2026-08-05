@@ -131,7 +131,7 @@ class Transcoder:
 
     def start(self) -> None:
         if not shutil.which("ffmpeg"):
-            raise RuntimeError("No encontré ffmpeg en el PATH.")
+            raise RuntimeError("Couldn't find ffmpeg on your PATH.")
         cmd = build_command(self.media, self.plan, self.offset)
         self.proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,

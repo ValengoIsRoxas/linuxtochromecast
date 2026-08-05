@@ -203,9 +203,9 @@ def _external_track(path: Path, track_id: int, prefer: str,
         # un genérico "Sin idioma".
         label = path.name
     else:
-        label = f"{LANG_NAMES.get(lang.lower(), lang.upper())} · archivo"
+        label = f"{LANG_NAMES.get(lang.lower(), lang.upper())} · file"
     if forced:
-        label += " · forzados"
+        label += " · forced"
 
     return SubTrack(
         id=track_id,
@@ -228,7 +228,7 @@ def track_for_file(path: str | Path, tracks: list[SubTrack], prefer: str = "spa"
     """
     path = Path(path).expanduser()
     if not path.is_file():
-        raise SubtitleError(f"No existe el archivo de subtítulos: {path}")
+        raise SubtitleError(f"No such subtitle file: {path}")
     resolved = path.resolve()
 
     for existing in tracks:
@@ -390,7 +390,7 @@ def load_file(path: Path, lang: str = "spa", encoding: str | None = None) -> lis
     try:
         raw = path.read_bytes()
     except OSError as exc:
-        raise SubtitleError(f"No pude leer {path.name}: {exc}") from exc
+        raise SubtitleError(f"Could not read {path.name}: {exc}") from exc
 
     text = _decode(raw, lang, encoding)
 
@@ -408,7 +408,7 @@ def load_file(path: Path, lang: str = "spa", encoding: str | None = None) -> lis
         tmp_path = tmp.name
     try:
         return _ffmpeg_to_cues(["-sub_charenc", "UTF-8", "-i", tmp_path],
-                               f"el subtítulo {path.name}")
+                               f"subtitle {path.name}")
     finally:
         try:
             os.unlink(tmp_path)
@@ -420,13 +420,13 @@ def extract_embedded(media_path: Path, stream: Stream) -> list[Cue]:
     """Saca una pista de subtítulos de adentro del contenedor."""
     if stream.is_bitmap_sub:
         raise SubtitleError(
-            f"La pista '{stream.label()}' es de imagen ({stream.codec}) y no se puede "
-            f"convertir a texto. Usá --burn para quemarla en el video."
+            f"Track '{stream.label()}' is image-based ({stream.codec}) and can't be "
+            f"converted to text. Use --burn to burn it into the video."
         )
     # Los subtítulos dentro de un contenedor ya vienen en UTF-8 por especificación.
     return _ffmpeg_to_cues(
         ["-i", str(media_path), "-map", f"0:s:{stream.type_index}"],
-        f"la pista embebida '{stream.label()}'",
+        f"embedded track '{stream.label()}'",
     )
 
 
@@ -436,18 +436,18 @@ def _ffmpeg_to_cues(input_args: list[str], what: str) -> list[Cue]:
     try:
         proc = subprocess.run(cmd, capture_output=True, timeout=120)
     except FileNotFoundError as exc:
-        raise SubtitleError("No encontré ffmpeg para convertir los subtítulos.") from exc
+        raise SubtitleError("Couldn't find ffmpeg to convert the subtitles.") from exc
     except subprocess.TimeoutExpired as exc:
-        raise SubtitleError(f"ffmpeg tardó demasiado extrayendo {what}.") from exc
+        raise SubtitleError(f"ffmpeg timed out extracting {what}.") from exc
 
     if not proc.stdout:
         err = proc.stderr.decode("utf-8", "replace").strip().splitlines()
-        detail = err[-1] if err else "sin detalle"
-        raise SubtitleError(f"No pude convertir {what}: {detail}")
+        detail = err[-1] if err else "no details"
+        raise SubtitleError(f"Could not convert {what}: {detail}")
 
     cues = parse_timed_text(proc.stdout.decode("utf-8", "replace"))
     if not cues:
-        raise SubtitleError(f"{what.capitalize()} quedó vacío tras la conversión.")
+        raise SubtitleError(f"{what.capitalize()} came out empty after conversion.")
     return cues
 
 

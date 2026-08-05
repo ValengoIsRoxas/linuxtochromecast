@@ -238,7 +238,7 @@ def test_remux():
         check("no recodifica nada",
               session.plan.video_codec == "copy" and session.plan.audio_codec == "copy")
         check("avisa que es por el contenedor",
-              any("contenedor" in r for r in session.plan.reasons),
+              any("container" in r for r in session.plan.reasons),
               " | ".join(session.plan.reasons))
 
         session.start(0)
@@ -319,7 +319,7 @@ def test_multichannel_audio():
     check("pero no recodifica el video", plan.video_codec == "copy",
           plan.video_codec)
     check("explica el motivo real",
-          any("canales" in r for r in plan.reasons), " | ".join(plan.reasons))
+          any("channel" in r for r in plan.reasons), " | ".join(plan.reasons))
 
     check("en un Ultra el 5.1 pasa sin tocar",
           plan_for(surround, ultra).mode == "direct")

@@ -14,9 +14,6 @@ Bring whatever format you already have. ffmpeg does the reading, so a file it
 can't open is rare, and anything the Chromecast can't play gets converted on the
 fly.
 
-> The command-line output and the web panel are currently in Spanish. Everything
-> else — flags, file names, this document — is in English.
-
 ---
 
 ## Why it exists
@@ -103,12 +100,13 @@ cheap, because the video is copied untouched and only the audio is re-encoded.
 It tells you which path it chose and why:
 
 ```
-  modo   transcodificando
+  mode   transcoding
   video  hevc 1920x1080 → libx264
-  audio  eac3 · Español · 6ch → aac
-         video hevc no soportado por Chromecast → recodifico a H.264
-         audio eac3 no soportado → convierto a AAC
-         bajo 6ch a estéreo (usá --surround para mantenerlo)
+  audio  eac3 · Spanish · 6ch → aac
+         video hevc not supported by Chromecast → re-encoding to H.264
+         audio eac3 not supported → converting to AAC
+         6-channel eac3 audio: Chromecast only plays 2 → downmixing to stereo
+         (--surround to try keeping it)
 ```
 
 You can override with `--transcode` or `--direct` if you know better.

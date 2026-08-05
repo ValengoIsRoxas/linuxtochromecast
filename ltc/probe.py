@@ -9,18 +9,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 LANG_NAMES = {
-    "spa": "Español", "es": "Español", "esp": "Español", "es-ES": "Español",
-    "lat": "Español (Latino)", "es-419": "Español (Latino)",
+    "spa": "Spanish", "es": "Spanish", "esp": "Spanish", "es-ES": "Spanish",
+    "lat": "Spanish (Latin America)", "es-419": "Spanish (Latin America)",
     "eng": "English", "en": "English",
-    "por": "Português", "pt": "Português", "pob": "Português (BR)",
-    "fra": "Français", "fre": "Français", "fr": "Français",
-    "ita": "Italiano", "it": "Italiano",
-    "deu": "Deutsch", "ger": "Deutsch", "de": "Deutsch",
-    "jpn": "日本語", "ja": "日本語",
-    "kor": "한국어", "ko": "한국어",
-    "chi": "中文", "zho": "中文", "zh": "中文",
-    "rus": "Русский", "ru": "Русский",
-    "und": "Sin idioma",
+    "por": "Portuguese", "pt": "Portuguese", "pob": "Portuguese (BR)",
+    "fra": "French", "fre": "French", "fr": "French",
+    "ita": "Italian", "it": "Italian",
+    "deu": "German", "ger": "German", "de": "German",
+    "jpn": "Japanese", "ja": "Japanese",
+    "kor": "Korean", "ko": "Korean",
+    "chi": "Chinese", "zho": "Chinese", "zh": "Chinese",
+    "rus": "Russian", "ru": "Russian",
+    "und": "Unknown language",
 }
 
 # Subtítulos que se pueden convertir a texto (WebVTT).
@@ -60,7 +60,7 @@ class Stream:
 
     @property
     def lang_name(self) -> str:
-        return LANG_NAMES.get(self.lang.lower(), self.lang.upper() if self.lang != "und" else "Sin idioma")
+        return LANG_NAMES.get(self.lang.lower(), self.lang.upper() if self.lang != "und" else "Unknown language")
 
     @property
     def is_text_sub(self) -> bool:
@@ -78,11 +78,11 @@ class Stream:
         else:
             bits.append(self.lang_name)
         if self.forced:
-            bits.append("forzados")
+            bits.append("forced")
         if self.kind == "audio" and self.channels:
             bits.append(f"{self.channels}ch")
         if self.kind == "subtitle" and self.is_bitmap_sub:
-            bits.append("imagen")
+            bits.append("image")
         return " · ".join(bits)
 
 
@@ -114,8 +114,8 @@ def _require(binary: str) -> str:
     found = shutil.which(binary)
     if not found:
         raise ProbeError(
-            f"No encontré '{binary}'. Instalalo con:  sudo dnf install ffmpeg-free  "
-            f"(o el paquete ffmpeg de tu distro)."
+            f"Couldn't find '{binary}'. Install it with:  sudo dnf install ffmpeg-free  "
+            f"(or your distro's ffmpeg package)."
         )
     return found
 
@@ -146,7 +146,7 @@ def probe(path: str | Path) -> MediaInfo:
     """Corre ffprobe y devuelve la estructura del archivo."""
     path = Path(path).expanduser().resolve()
     if not path.is_file():
-        raise ProbeError(f"No existe el archivo: {path}")
+        raise ProbeError(f"No such file: {path}")
 
     ffprobe = _require("ffprobe")
     cmd = [
@@ -159,9 +159,9 @@ def probe(path: str | Path) -> MediaInfo:
         out = subprocess.run(cmd, capture_output=True, timeout=60, check=True).stdout
     except subprocess.CalledProcessError as exc:
         msg = exc.stderr.decode("utf-8", "replace").strip() or "error desconocido"
-        raise ProbeError(f"ffprobe no pudo leer el archivo: {msg}") from exc
+        raise ProbeError(f"ffprobe could not read the file: {msg}") from exc
     except subprocess.TimeoutExpired as exc:
-        raise ProbeError("ffprobe tardó demasiado (¿archivo en red lenta?)") from exc
+        raise ProbeError("ffprobe timed out (file on a slow network share?)") from exc
 
     data = json.loads(out or b"{}")
     fmt = data.get("format", {})
@@ -205,6 +205,6 @@ def probe(path: str | Path) -> MediaInfo:
         getattr(info, kind if kind != "subtitle" else "subtitles").append(stream)
 
     if not info.video and not info.audio:
-        raise ProbeError(f"El archivo no tiene pistas reproducibles: {path.name}")
+        raise ProbeError(f"This file has no playable streams: {path.name}")
 
     return info

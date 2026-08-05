@@ -147,7 +147,7 @@ class CastRequestHandler(BaseHTTPRequestHandler):
         try:
             payload = json.loads(self.rfile.read(length) or b"{}")
         except (ValueError, OSError):
-            return self._error(400, "JSON inválido")
+            return self._error(400, "Invalid JSON")
 
         try:
             self._run_command(payload)
@@ -191,7 +191,7 @@ class CastRequestHandler(BaseHTTPRequestHandler):
         elif cmd == "nudge_delay":
             session.nudge_delay(float(value))
         else:
-            raise ValueError(f"Comando desconocido: {cmd!r}")
+            raise ValueError(f"Unknown command: {cmd!r}")
 
     # --- subtítulos ---
 
@@ -199,11 +199,11 @@ class CastRequestHandler(BaseHTTPRequestHandler):
         try:
             track_id = int(Path(path).stem)
         except ValueError:
-            return self._error(400, "Id de subtítulo inválido")
+            return self._error(400, "Invalid subtitle id")
 
         track = next((t for t in self.session.tracks if t.id == track_id), None)
         if track is None:
-            return self._error(404, "Ese subtítulo no existe")
+            return self._error(404, "No such subtitle")
 
         # El delay viaja en la URL para que cambiarlo invalide el caché del
         # receptor; el offset del stream lo sabe la sesión.
@@ -233,7 +233,7 @@ class CastRequestHandler(BaseHTTPRequestHandler):
         try:
             size = path.stat().st_size
         except OSError as exc:
-            return self._error(500, f"No pude abrir el archivo: {exc}")
+            return self._error(500, f"Could not open the file: {exc}")
 
         ctype = self.session.plan.content_type
         start, end = 0, size - 1

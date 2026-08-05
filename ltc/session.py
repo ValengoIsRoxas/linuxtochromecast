@@ -83,10 +83,10 @@ class Session:
             elif sub_choice is not None:
                 chosen = next((t for t in tracks if t.id == sub_choice), None)
                 if chosen is None:
-                    raise ValueError(f"No existe el subtítulo #{sub_choice}.")
+                    raise ValueError(f"There is no subtitle #{sub_choice}.")
                 if chosen.bitmap:
                     raise ValueError(
-                        f"El subtítulo #{sub_choice} es de imagen; usá --burn {sub_choice}."
+                        f"Subtitle #{sub_choice} is image-based; use --burn {sub_choice}."
                     )
                 session.active_sub = chosen.id
             else:
@@ -258,7 +258,7 @@ class Session:
             previous = self.active_sub
             if track_id is not None and not any(
                     t.id == track_id for t in self.usable_tracks()):
-                raise ValueError(f"No existe el subtítulo #{track_id}.")
+                raise ValueError(f"There is no subtitle #{track_id}.")
 
             self.active_sub = track_id
             if track_id is None:

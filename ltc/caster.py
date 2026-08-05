@@ -88,7 +88,7 @@ def discover(timeout: float = 6.0, name: str | None = None) -> list[Device]:
     try:
         casts, browser = pychromecast.get_chromecasts(timeout=timeout)
     except Exception as exc:  # zeroconf puede fallar si no hay red
-        raise CastError(f"Falló el descubrimiento en la red: {exc}") from exc
+        raise CastError(f"Network discovery failed: {exc}") from exc
 
     devices = []
     try:
@@ -128,12 +128,12 @@ def device_from_host(host: str, port: int = 8009, timeout: float = 10.0) -> Devi
     try:
         status = get_device_info(host, timeout=timeout)
     except Exception as exc:
-        raise CastError(f"No pude consultar {host}:{port} — {exc}") from exc
+        raise CastError(f"Could not query {host}:{port} — {exc}") from exc
 
     if status is None:
         raise CastError(
-            f"No hay ningún Chromecast respondiendo en {host}. "
-            f"Verificá la IP con: ltc --list-devices"
+            f"No Chromecast is responding at {host}. "
+            f"Check the IP with: ltc --list-devices"
         )
 
     return Device(
@@ -175,7 +175,7 @@ class Caster:
             self.cast.wait(timeout=timeout)
         except Exception as exc:
             raise CastError(
-                f"No pude conectarme a «{device.name}» ({device.host}): {exc}"
+                f"Could not connect to \u00ab{device.name}\u00bb ({device.host}): {exc}"
             ) from exc
         self.mc = self.cast.media_controller
 
