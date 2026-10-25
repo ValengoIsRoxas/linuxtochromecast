@@ -19,6 +19,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from .logutil import get_logger
 from .session import Session
 from .subtitles import SubtitleError
 from .transcode import Transcoder
@@ -26,6 +27,7 @@ from .webui import PAGE
 
 CHUNK = 256 * 1024
 _RANGE = re.compile(r"bytes=(\d*)-(\d*)")
+log = get_logger("server")
 
 
 class CastHTTPServer(ThreadingHTTPServer):
@@ -41,13 +43,23 @@ class CastHTTPServer(ThreadingHTTPServer):
         self._tlock = threading.Lock()
         super().__init__(addr, CastRequestHandler)
 
-    def new_transcoder(self) -> Transcoder:
-        """Arranca un ffmpeg nuevo y descarta el anterior, si quedaba alguno."""
-        session = self.session
+    def transcoder_for(self, offset: float) -> Transcoder:
+        """Devuelve el ffmpeg que corresponde a `offset`, reusándolo si ya está.
+
+        Reusarlo es el punto: una reconexión del receptor pide el mismo offset
+        y antes eso mataba al proceso que venía bien para arrancar otro de
+        cero, con lo cual el receptor recibía otra vez el arranque en vez de la
+        continuación. Sólo arrancamos uno nuevo cuando el offset cambió de
+        verdad (un seek).
+        """
         with self._tlock:
-            if self.transcoder is not None:
-                self.transcoder.stop()
-            t = Transcoder(session.media, session.plan, session.stream_offset)
+            current = self.transcoder
+            if current is not None and abs(current.offset - offset) < 0.001 \
+                    and current.path is not None and current.usable:
+                return current
+            if current is not None:
+                current.cleanup()
+            t = Transcoder(self.session.media, self.session.plan, offset)
             t.start()
             self.transcoder = t
             return t
@@ -55,7 +67,7 @@ class CastHTTPServer(ThreadingHTTPServer):
     def shutdown_all(self) -> None:
         with self._tlock:
             if self.transcoder is not None:
-                self.transcoder.stop()
+                self.transcoder.cleanup()
                 self.transcoder = None
 
     def handle_error(self, request, client_address) -> None:
@@ -132,6 +144,7 @@ class CastRequestHandler(BaseHTTPRequestHandler):
         elif path.startswith("/sub/"):
             self._serve_subtitle(path, query)
         elif path == "/api/status":
+            self.session.note_poll()
             self._json(self.session.snapshot())
         elif path == "/health":
             self._json({"ok": True})
@@ -173,6 +186,8 @@ class CastRequestHandler(BaseHTTPRequestHandler):
             session.pause()
         elif cmd == "stop":
             session.stop()
+        elif cmd == "retry":
+            session.retry()
         elif cmd == "quit":
             session.stop()
             session.quit_requested.set()
@@ -223,19 +238,24 @@ class CastRequestHandler(BaseHTTPRequestHandler):
     # --- video ---
 
     def _serve_media(self) -> None:
-        if self.session.plan.seekable:
+        prepared = self.session.prepared
+        if prepared is not None:
+            # Ya reencodado entero: se sirve como cualquier archivo, con el
+            # tamaño exacto y Range de verdad.
+            self._serve_file(prepared, "video/mp4")
+        elif self.session.plan.seekable:
             self._serve_file()
         else:
             self._serve_pipe()
 
-    def _serve_file(self) -> None:
-        path = self.session.media.path
+    def _serve_file(self, path: Path | None = None, ctype: str | None = None) -> None:
+        path = path or self.session.media.path
         try:
             size = path.stat().st_size
         except OSError as exc:
             return self._error(500, f"Could not open the file: {exc}")
 
-        ctype = self.session.plan.content_type
+        ctype = ctype or self.session.plan.content_type
         start, end = 0, size - 1
         partial = False
 
@@ -286,19 +306,42 @@ class CastRequestHandler(BaseHTTPRequestHandler):
             return
 
     def _serve_pipe(self) -> None:
-        """Stream generado por ffmpeg al vuelo.
+        """Sirve el MP4 que ffmpeg va escribiendo a un temporal.
 
-        Va con un Content-Length estimado y sin `Transfer-Encoding: chunked`:
-        probado contra el hardware, el receptor rechaza el chunked para MP4 con
-        LOAD_FAILED antes de mostrar un solo cuadro. Ver
-        `Session.estimated_stream_size` para de dónde sale el número.
+        Acepta `Range`, y esa es la parte que importa: si el receptor corta y
+        vuelve pidiendo desde el byte N, retomamos desde ahí en vez de matar
+        ffmpeg y reencodar de cero el mismo tramo. Sin esto, cada reconexión
+        reiniciaba el stream y el receptor terminaba sin datos, cortando la
+        reproducción con MEDIA_SRC_NOT_SUPPORTED (104).
+
+        El Content-Length sigue siendo estimado —el tamaño real recién se sabe
+        cuando ffmpeg termina— y no se usa `Transfer-Encoding: chunked`: probado
+        contra el hardware, el receptor lo rechaza para MP4 con LOAD_FAILED
+        antes de mostrar un solo cuadro.
         """
         promised = self.session.estimated_stream_size()
 
-        self.send_response(200)
+        start = 0
+        match = _RANGE.match(self.headers.get("Range", "") or "")
+        if match and match.group(1):
+            start = int(match.group(1))
+        partial = bool(match)
+
+        if start >= promised:
+            self.send_response(416)
+            self.send_header("Content-Range", f"bytes */{promised}")
+            self._cors()
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+
+        self.send_response(206 if partial else 200)
         self.send_header("Content-Type", self.session.plan.content_type)
-        self.send_header("Content-Length", str(promised))
-        self.send_header("Accept-Ranges", "none")
+        self.send_header("Content-Length", str(promised - start))
+        self.send_header("Accept-Ranges", "bytes")
+        if partial:
+            self.send_header("Content-Range",
+                             f"bytes {start}-{promised - 1}/{promised}")
         self.send_header("Cache-Control", "no-store")
         self._cors()
         self.end_headers()
@@ -308,21 +351,54 @@ class CastRequestHandler(BaseHTTPRequestHandler):
         if self.command == "HEAD":
             return
 
-        transcoder = self.server.new_transcoder()
-        sent = 0
+        transcoder = self.server.transcoder_for(self.session.stream_offset)
+        pos = start
+        client_gone = False
+        starved = False
         try:
-            for block in transcoder.stream():
-                # No pasarse de lo prometido: el cliente deja de leer ahí igual,
-                # y así el cuerpo de la respuesta queda bien formado.
-                if sent + len(block) > promised:
-                    block = block[: promised - sent]
-                if block and not self._write(block):
-                    return
-                sent += len(block)
-                if sent >= promised:
+            while pos < promised:
+                if not transcoder.wait_for(pos):
+                    if transcoder.finished and not transcoder.killed \
+                            and not transcoder.returncode:
+                        # ffmpeg terminó bien pero la salida quedó más chica
+                        # que lo prometido. Si dejamos el Content-Length sin
+                        # cumplir, el receptor espera bytes que no existen y
+                        # corta con 104 cerca del final: completamos.
+                        transcoder.pad_to(promised)
+                        if transcoder.wait_for(pos, timeout=5):
+                            continue
+                    # No va a haber más datos: cortamos en vez de colgarnos.
+                    starved = not transcoder.finished or transcoder.killed
                     break
+                block = transcoder.read_from(pos, min(CHUNK, promised - pos))
+                if not block:
+                    # Sin bytes pese a que `wait_for` dijo que había: el
+                    # temporal desapareció (un seek lo reemplazó). Cortamos:
+                    # insistir acá sería un bucle infinito.
+                    starved = True
+                    break
+                if not self._write(block):
+                    client_gone = True
+                    return
+                pos += len(block)
         finally:
-            transcoder.stop()
+            if pos < promised and not client_gone:
+                if transcoder.killed:
+                    cause = "lo matamos desde acá (cambió el offset)"
+                elif transcoder.returncode:
+                    cause = f"ffmpeg salió con código {transcoder.returncode}"
+                elif starved:
+                    cause = "se cortó el volcado a disco"
+                else:
+                    cause = "ffmpeg llegó al final de su salida"
+                stderr = transcoder.error
+                log.warning(
+                    "El stream terminó en %d/%d bytes prometidos (offset=%.1fs, "
+                    "%s): %s.%s",
+                    pos, promised, self.session.stream_offset,
+                    self.session.media.path.name, cause,
+                    f" ffmpeg stderr: {stderr}" if stderr else "",
+                )
 
 
 def serve(session: Session, host: str = "0.0.0.0", port: int = 0) -> CastHTTPServer:

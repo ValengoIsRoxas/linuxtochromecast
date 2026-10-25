@@ -16,13 +16,19 @@ import webbrowser
 from pathlib import Path
 
 from . import __version__
+from .cache import DEFAULT_LIMIT_GB, ConversionCache
 from .caster import (
     CastError, Caster, looks_like_host, discover, local_ip_towards,
 )
+from .library import Library, ProgressStore
+from .libraryserver import serve_library
+from .logutil import LOG_PATH, setup_logging
+from .player import PlayOptions, Player
 from .probe import ProbeError, probe
 from .server import serve
 from .session import Session
 from .subtitles import collect_tracks
+from .transcode import PrepareError, detect_hw_encoder, encode_whole
 
 # --- salida con color -----------------------------------------------------------
 
@@ -89,6 +95,11 @@ def parse_time(value: str) -> float:
 
 # --- argumentos -----------------------------------------------------------------
 
+# Un puerto fijo hace que la dirección del panel sea siempre la misma, así se
+# puede guardar en el celular. El 8009 es del Chromecast; este está libre en
+# casi cualquier máquina.
+DEFAULT_PORT = 8642
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="ltc",
@@ -99,10 +110,12 @@ def build_parser() -> argparse.ArgumentParser:
             "  ltc show.mkv -s 2                 use subtitle track #2\n"
             "  ltc movie.mp4 -d \"TV Living\"      pick the device\n"
             "  ltc movie.mkv --list-tracks       list the file's tracks and exit\n"
+            "  ltc ~/Movies                      browse a folder from your phone\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("video", nargs="?", help="Video file to cast")
+    p.add_argument("video", nargs="?",
+                   help="Video file to cast, or a folder to browse as a library")
     p.add_argument("-d", "--device", metavar="NAME",
                    help="Chromecast name (a partial match works), or its IP")
     p.add_argument("-s", "--sub", metavar="N|FILE",
@@ -123,14 +136,26 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Audio track number")
     p.add_argument("-t", "--start", type=parse_time, default=0.0, metavar="TIME",
                    help="Start at a given point: 90, 1:30 or 1:02:03")
-    p.add_argument("-p", "--port", type=int, default=0,
-                   help="Local server port (default: any free one)")
+    p.add_argument("-p", "--port", type=int, default=None,
+                   help=f"Local server port (default: {DEFAULT_PORT}, or any free "
+                        f"one if it's taken; 0 = always a random one)")
     p.add_argument("--transcode", action="store_true",
                    help="Force re-encoding even if the file looks compatible")
     p.add_argument("--direct", action="store_true",
                    help="Force direct playback, bypassing ffmpeg")
     p.add_argument("--surround", action="store_true",
                    help="Don't downmix multichannel audio to stereo")
+    p.add_argument("--no-wait", action="store_true",
+                   help="Start casting immediately instead of re-encoding the "
+                        "whole file first (faster to start, no real seeking)")
+    p.add_argument("--cache-size", type=float, default=DEFAULT_LIMIT_GB, metavar="GB",
+                   help="Keep finished conversions so the same file starts instantly "
+                        f"next time, up to this much disk (default: {DEFAULT_LIMIT_GB:g}; "
+                        "0 = don't keep them)")
+    p.add_argument("--no-hwaccel", action="store_true",
+                   help="Re-encode on the CPU even if a GPU could do it")
+    p.add_argument("--no-autoplay", action="store_true",
+                   help="Library mode: don't start the next episode on its own")
     p.add_argument("--no-browser", action="store_true",
                    help="Don't open the web panel automatically")
     p.add_argument("--list-devices", action="store_true",
@@ -305,6 +330,43 @@ def render_status(session: Session, message: str = "") -> None:
     sys.stdout.flush()
 
 
+QUIT_KEYS = ("q", "Q", "\x03", "\x04")
+
+
+def handle_key(session: Session, key: str | None, notify) -> None:
+    """Las teclas de reproducción, compartidas por los dos modos."""
+    if key == " " or key in ("p", "P"):
+        session.toggle()
+    elif key == "LEFT":
+        session.skip(-10)
+    elif key == "RIGHT":
+        session.skip(10)
+    elif key == "DOWN":
+        session.skip(-30)
+    elif key == "UP":
+        session.skip(30)
+    elif key in ("k", "K"):
+        session.set_volume(min(1.0, session.caster.volume + 0.05))
+    elif key in ("j", "J"):
+        session.set_volume(max(0.0, session.caster.volume - 0.05))
+    elif key in ("m", "M"):
+        session.set_muted(not session.caster.muted)
+    elif key in ("s", "S"):
+        session.cycle_subtitle()
+        active = next((t for t in session.usable_tracks()
+                       if t.id == session.active_sub), None)
+        notify(f"subtitles: {active.label if active else 'off'}")
+    elif key == "[":
+        session.nudge_delay(-0.1)
+        notify(f"sync {session.sub_delay:+.1f}s")
+    elif key == "]":
+        session.nudge_delay(0.1)
+        notify(f"sync {session.sub_delay:+.1f}s")
+    elif key == "0":
+        session.set_delay(0.0)
+        notify("sync reset to zero")
+
+
 def control_loop(session: Session) -> None:
     """Bucle principal: dibuja el estado y atiende el teclado."""
     message, message_until = "", 0.0
@@ -326,41 +388,21 @@ def control_loop(session: Session) -> None:
             if message and time.monotonic() > message_until:
                 message = ""
 
+            if key in QUIT_KEYS:
+                break
             try:
-                if key in ("q", "Q", "\x03", "\x04"):
-                    break
-                elif key == " " or key in ("p", "P"):
-                    session.toggle()
-                elif key == "LEFT":
-                    session.skip(-10)
-                elif key == "RIGHT":
-                    session.skip(10)
-                elif key == "DOWN":
-                    session.skip(-30)
-                elif key == "UP":
-                    session.skip(30)
-                elif key in ("k", "K"):
-                    session.set_volume(min(1.0, session.caster.volume + 0.05))
-                elif key in ("j", "J"):
-                    session.set_volume(max(0.0, session.caster.volume - 0.05))
-                elif key in ("m", "M"):
-                    session.set_muted(not session.caster.muted)
-                elif key in ("s", "S"):
-                    session.cycle_subtitle()
-                    active = next((t for t in session.usable_tracks()
-                                   if t.id == session.active_sub), None)
-                    notify(f"subtitles: {active.label if active else 'off'}")
-                elif key == "[":
-                    session.nudge_delay(-0.1)
-                    notify(f"sync {session.sub_delay:+.1f}s")
-                elif key == "]":
-                    session.nudge_delay(0.1)
-                    notify(f"sync {session.sub_delay:+.1f}s")
-                elif key == "0":
-                    session.set_delay(0.0)
-                    notify("sync reset to zero")
+                handle_key(session, key, notify)
             except Exception as exc:
                 notify(f"error: {exc}")
+
+            if not session.caster.connected:
+                # El socket con el receptor se murió sin avisar: sin esto nos
+                # quedábamos mudos, sirviendo el pipe HTTP a nadie mientras
+                # player_state se congelaba en lo último que vio.
+                print()
+                print(red("  Lost the connection to the Chromecast."))
+                session.announce_end("Lost the connection to the Chromecast.")
+                return
 
             state = session.caster.player_state
             if state in ("PLAYING", "BUFFERING", "PAUSED"):
@@ -370,8 +412,10 @@ def control_loop(session: Session) -> None:
                 reason = getattr(status, "idle_reason", None) if status else None
                 if reason in ("FINISHED", "CANCELLED", "ERROR"):
                     print()
-                    print(dim("  Playback finished." if reason == "FINISHED"
-                              else f"  The receiver stopped ({reason})."))
+                    finished = reason == "FINISHED"
+                    text = "Playback finished." if finished else f"The receiver stopped ({reason})."
+                    print(dim(f"  {text}"))
+                    session.announce_end(text, ok=finished)
                     return
 
             render_status(session, message)
@@ -380,6 +424,7 @@ def control_loop(session: Session) -> None:
 # --- programa principal ---------------------------------------------------------
 
 def run(args: argparse.Namespace) -> int:
+    setup_logging()
     media = probe(args.video)
 
     device = choose_device(args.device, args.timeout)
@@ -433,9 +478,28 @@ def run(args: argparse.Namespace) -> int:
 
     session.sub_delay = args.delay
 
+    # Reencodar entero antes de castear es lo que hace que el Content-Length
+    # sea exacto: con el archivo terminado no hay nada que estimar, así que el
+    # receptor nunca se queda esperando bytes que no existen (que es lo que lo
+    # hacía cortar cerca del final). Encima queda seek real.
+    # Y lo que ya se encodeó una vez queda guardado: volver a ver el mismo
+    # capítulo arranca al instante en vez de repetir todo el trabajo.
+    cache = ConversionCache(args.cache_size)
+    if session.plan.mode == "transcode":
+        session.prepared = cache.lookup(media, session.plan)
+        if session.prepared is not None:
+            print(f"\n  {green('✓')} {dim('using the conversion saved last time')}")
+        elif not args.no_wait:
+            try:
+                encoded = _encode_ahead(media, session.plan, args.no_hwaccel)
+            except PrepareError as exc:
+                caster.disconnect()
+                die(str(exc))
+            session.prepared = cache.adopt(encoded, media, session.plan)
+
     # El server escucha en todas las interfaces, pero la URL que le pasamos al
     # Chromecast tiene que ser la IP nuestra que él pueda alcanzar.
-    http = serve(session, port=args.port)
+    http = _bind(lambda port: serve(session, port=port), args.port)
     ip = local_ip_towards(device.host)
     port = http.server_address[1]
     session.base_url = f"http://{ip}:{port}"
@@ -470,8 +534,183 @@ def run(args: argparse.Namespace) -> int:
         http.shutdown_all()
         http.shutdown()
         caster.disconnect()
+        # El reencodado pesa más de un giga: si no quedó en la caché, no lo
+        # dejamos tirado.
+        if session.prepared is not None and not cache.contains(session.prepared):
+            try:
+                session.prepared.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     return 0
+
+
+# --- modo biblioteca ------------------------------------------------------------
+
+def run_library(args: argparse.Namespace) -> int:
+    """`ltc <carpeta>`: queda corriendo y el panel elige qué ver."""
+    setup_logging()
+    root = Path(args.video).expanduser().resolve()
+
+    progress(f"Scanning {root}…")
+    library = Library.scan(root)
+    clear_progress()
+    if not len(library):
+        die(f"Found no videos in {root}.")
+
+    device = choose_device(args.device, args.timeout)
+    progress(f"Connecting to {device.name}…")
+    try:
+        caster = Caster(device)
+    except CastError as exc:
+        die(str(exc))
+    clear_progress()
+
+    force = "transcode" if args.transcode else "direct" if args.direct else "auto"
+    player = Player(caster, library, ProgressStore(), PlayOptions(
+        force=force, surround=args.surround, sub_lang=args.sub_lang,
+        sub_scale=args.sub_scale, sub_encoding=args.sub_encoding,
+        autoplay_next=not args.no_autoplay, hwaccel=not args.no_hwaccel,
+    ), cache=ConversionCache(args.cache_size))
+    http = _bind(lambda port: serve_library(player, port=port), args.port)
+    ip = local_ip_towards(device.host)
+    base_url = f"http://{ip}:{http.server_address[1]}"
+    player.attach(http, base_url)
+
+    episodes = sum(len(s.episodes) for s in library.shows)
+    print()
+    print(f"  {bold('Library')}  {dim(str(root))}")
+    print(f"  {dim(f'{len(library.movies)} movies · {len(library.shows)} series ({episodes} episodes)')}")
+    print(f"  {dim('→')} {bold(device.name)} {dim(f'({device.model})')}")
+    hw = None if args.no_hwaccel else detect_hw_encoder()
+    print(f"  {dim('re-encode')}  {hw.label if hw else 'CPU (x264)'}")
+    print()
+    print(f"  {dim('panel')}  {cyan(base_url)}  {dim('open it on your phone')}")
+    print(f"  {dim('log')}    {dim(str(LOG_PATH))}")
+    print(f"  {dim(HELP)}")
+    print()
+
+    signal.signal(signal.SIGTERM, lambda *_: player.quit_requested.set())
+
+    try:
+        if not args.no_browser and os.environ.get("DISPLAY", os.environ.get("WAYLAND_DISPLAY")):
+            threading.Thread(target=lambda: webbrowser.open(base_url), daemon=True).start()
+        library_loop(player)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        print("\n" + dim("  Closing…"))
+        try:
+            player.close()
+            if player.played_anything:
+                caster.quit_app()
+        except Exception:
+            pass
+        http.shutdown_all()
+        http.shutdown()
+        caster.disconnect()
+
+    return 0
+
+
+def library_loop(player: Player) -> None:
+    """Como `control_loop`, pero la sesión va y viene según lo que elijan."""
+    message, message_until = "", 0.0
+
+    def notify(text: str) -> None:
+        nonlocal message, message_until
+        message, message_until = text, time.monotonic() + 2.0
+
+    with Keyboard() as kb:
+        while not player.quit_requested.is_set():
+            key = kb.read(0.25)
+            if message and time.monotonic() > message_until:
+                message = ""
+            if key in QUIT_KEYS:
+                return
+
+            session = player.session
+            if session is not None and key:
+                try:
+                    handle_key(session, key, notify)
+                except Exception as exc:
+                    notify(f"error: {exc}")
+
+            if not player.caster.connected:
+                print()
+                print(red("  Lost the connection to the Chromecast."))
+                return
+
+            if session is not None:
+                render_status(session, message)
+            elif _TTY:
+                loading, pending = player.loading, player.pending
+                progress = player.converter.progress(pending.key) if pending else None
+                if loading:
+                    line = f"  {dim('⋯')} starting {loading.label}"
+                elif pending and progress:
+                    done = progress["end"] / progress["duration"] if progress["duration"] else 0
+                    line = (f"  {dim('⋯')} converting {pending.item.label} "
+                            f"{done * 100:.0f}%  {dim('plays when ready')}")
+                else:
+                    line = f"  {dim('·')} {dim('waiting for something to play')}"
+                if player.error:
+                    line += f"   {yellow(player.error)}"
+                sys.stdout.write("\r\033[2K" + line)
+                sys.stdout.flush()
+
+    print()
+    print(dim("  Closed from the web panel."))
+
+
+def _bind(start_server, port: int | None):
+    """Levanta el servidor en el puerto pedido, o en el de siempre.
+
+    Si el de siempre está ocupado (otro `ltc` corriendo, por ejemplo) se usa
+    cualquiera libre en vez de morir: la dirección cambia, pero se avisa.
+    Un puerto pedido con -p que está ocupado sí es un error.
+    """
+    try:
+        return start_server(DEFAULT_PORT if port is None else port)
+    except OSError as exc:
+        if port is not None:
+            die(f"Can't use port {port}: {exc.strerror or exc}")
+        print(yellow(f"  Port {DEFAULT_PORT} is taken; using a random one, "
+                     "so the panel address will differ this time."))
+        return start_server(0)
+
+
+def _encode_ahead(media, plan, no_hwaccel: bool):
+    """Reencoda la película entera mostrando el avance."""
+    hw = None if no_hwaccel else detect_hw_encoder()
+    where = hw.label if hw else "CPU"
+    total = media.duration or 0.0
+    started = time.monotonic()
+
+    print()
+    print(f"  {dim('Re-encoding first so playback is exact and seekable')} "
+          f"{dim(f'({where})')}")
+
+    def on_progress(done: float) -> None:
+        elapsed = time.monotonic() - started
+        if not total:
+            progress(f"  encoding… {fmt_time(done)}")
+            return
+        frac = max(0.0, min(1.0, done / total))
+        speed = (done / elapsed) if elapsed > 0.5 else 0.0
+        eta = ((total - done) / speed) if speed > 0 else 0.0
+        bar = int(frac * 24)
+        print(f"\r  [{'█' * bar}{'·' * (24 - bar)}] {frac * 100:4.1f}%"
+              f"  {speed:.0f}x  ETA {fmt_time(eta)}   ",
+              end="", flush=True)
+
+    out = encode_whole(media, plan, on_progress=on_progress, hw=hw)
+    took = time.monotonic() - started
+    size = out.stat().st_size
+    print(f"\r  {green('✓')} encoded in {fmt_time(took)}"
+          f" {dim(f'({size / 1e9:.2f} GB, {(total / took) if took else 0:.0f}x realtime)')}"
+          f"{' ' * 20}")
+    return out
 
 
 def _print_summary(session: Session, device, panel_url: str) -> None:
@@ -509,11 +748,17 @@ def _print_summary(session: Session, device, panel_url: str) -> None:
 
     print()
     print(f"  {dim('panel')}  {cyan(panel_url)}")
+    print(f"  {dim('log')}    {dim(str(LOG_PATH))}")
     print(f"  {dim(HELP)}")
     print()
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Sin terminal (lanzado desde el gestor de archivos, o con la salida a un
+    # archivo) Python junta la salida en bloques: la dirección del panel recién
+    # aparecía al cerrar el programa.
+    if not _TTY:
+        sys.stdout.reconfigure(line_buffering=True)
     parser = build_parser()
     args = parser.parse_args(argv)
 
@@ -523,6 +768,8 @@ def main(argv: list[str] | None = None) -> int:
         if not args.video:
             parser.print_help()
             return 1
+        if Path(args.video).expanduser().is_dir():
+            return run_library(args)
         if args.list_tracks:
             return cmd_list_tracks(args.video, args.sub_lang)
         return run(args)

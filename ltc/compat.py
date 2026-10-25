@@ -84,6 +84,7 @@ class Plan:
     burn_sub: Stream | None = None  # subtítulo bitmap a quemar en el video
     scale_height: int = 0         # 0 = sin reescalar
     downmix: bool = False         # bajar a estéreo
+    video_bitrate: int = 0        # kbps objetivo cuando reencodamos (0 = copy)
     reasons: list[str] = None     # explicación legible de cada decisión
 
     def __post_init__(self) -> None:
@@ -185,7 +186,7 @@ def plan_for(
         if not reasons:
             reasons.append("container and codecs already compatible → no processing")
         return Plan("direct", "copy", "copy", _mime_for(media.container),
-                    audio, None, 0, False, reasons)
+                    audio, None, 0, False, reasons=reasons)
 
     if video_ok and audio_ok:
         if multi_audio:
@@ -193,7 +194,7 @@ def plan_for(
         else:
             reasons.append(f"container {media.container.split(',')[0]} not supported → remuxing to MP4 (no re-encoding)")
         return Plan("remux", "copy", "copy", "video/mp4",
-                    audio, None, 0, False, reasons)
+                    audio, None, 0, False, reasons=reasons)
 
     return Plan(
         "transcode",
@@ -204,8 +205,28 @@ def plan_for(
         burn_sub,
         scale_height,
         downmix,
-        reasons,
+        video_bitrate=0 if video_ok else _target_video_bitrate(scale_height or video.height),
+        reasons=reasons,
     )
+
+
+def _target_video_bitrate(height: int) -> int:
+    """kbps objetivo para el H.264 de salida, según la altura efectiva.
+
+    No hay que adivinar a partir del bitrate del original: HEVC comprime
+    bastante mejor que H.264 a igual calidad, así que un H.264 CRF de calidad
+    pareja pesa más —a veces bastante más— que el HEVC que reemplaza. Con un
+    bitrate objetivo en vez de CRF, el tamaño de salida queda acotado y
+    predecible, que es lo que necesita `estimated_stream_size` para no
+    quedarse corto y cortar la película antes del final real.
+    """
+    if height >= 1080:
+        return 6000
+    if height >= 720:
+        return 3500
+    if height >= 480:
+        return 2000
+    return 1200
 
 
 # Croma y profundidad que sabe decodificar el receptor. Todo lo que no sea 4:2:0

@@ -33,6 +33,9 @@ class Session:
     tracks: list[SubTrack] = field(default_factory=list)
 
     base_url: str = ""
+    # Archivo ya reencodado entero. Cuando está, se sirve ese en vez de pasar
+    # por el pipe: tamaño exacto (nada que estimar) y seek nativo por Range.
+    prepared: Path | None = None
     active_sub: int | None = None
     sub_delay: float = 0.0
     sub_scale: float = 1.0
@@ -41,6 +44,16 @@ class Session:
 
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     _last_error: str = ""
+    # Desde dónde se pidió la última carga, para que "Try again" vuelva ahí
+    # aunque el receptor no haya llegado a reproducir nada.
+    _load_target: float = 0.0
+    # Por qué ltc se cierra solo (se cortó la conexión, terminó la película,
+    # el receptor falló). Lo lee el panel, que si no sólo vería un servidor
+    # muerto y preguntaría si sigue andando.
+    ended: str = ""
+    ended_ok: bool = False
+    last_poll: float = 0.0
+    end_seen: threading.Event = field(default_factory=threading.Event, repr=False)
     _started_at: float = 0.0
     # Lo levanta el panel web al apretar "Detener y salir"; lo mira el bucle de
     # la terminal. Es la única forma de cerrar cuando se lanzó sin terminal,
@@ -125,6 +138,15 @@ class Session:
     def usable_tracks(self) -> list[SubTrack]:
         return [t for t in self.tracks if not t.bitmap]
 
+    @property
+    def seekable(self) -> bool:
+        """True si el receptor puede saltar solo, sin reiniciar ffmpeg.
+
+        Con el archivo ya encodeado esto vale aunque el plan sea `transcode`:
+        lo que servimos es un MP4 completo con Range, igual que en direct play.
+        """
+        return self.plan.seekable or self.prepared is not None
+
     def subtitle_shift(self) -> float:
         """Cuánto hay que correr los cues para que peguen con el stream actual."""
         return self.stream_offset + self.sub_delay
@@ -153,6 +175,15 @@ class Session:
         if not base:  # sin datos, tiramos alto: 4 Mbps
             base = int(4_000_000 / 8 * (total or 7200))
 
+        if self.plan.reencodes_video and self.plan.video_bitrate and total:
+            # El bitrate del original no dice nada del tamaño de salida: un
+            # H.264 puede pesar bastante más que el HEVC que reemplaza. Este es
+            # el objetivo real que le pedimos a ffmpeg (ver
+            # `compat._target_video_bitrate` y `transcode.build_command`).
+            audio_kbps = 192 if self.plan.audio_codec == "aac" else 0
+            target_bps = (self.plan.video_bitrate + audio_kbps) * 1000
+            base = max(base, int(target_bps / 8 * total))
+
         return int(base * fraction * 1.15) + 8 * 1024 * 1024
 
     # --- reproducción ---
@@ -160,8 +191,30 @@ class Session:
     def start(self, position: float = 0.0) -> None:
         """Carga el video en el Chromecast desde `position` (segundos absolutos)."""
         with self._lock:
+            self._last_error = ""
             self._prepare_subtitles()
             self._load(position)
+
+    def note_poll(self) -> None:
+        """El panel pidió el estado; si ya había un final anunciado, lo leyó."""
+        self.last_poll = time.monotonic()
+        if self.ended:
+            self.end_seen.set()
+
+    def announce_end(self, text: str, *, ok: bool = False, wait: float = 4.0) -> None:
+        """Deja dicho por qué ltc va a cerrarse y le da un instante al panel.
+
+        Si hay un panel abierto (pidió el estado hace poco) se espera, como
+        mucho `wait` segundos, a que lo lea; si no, no se demora nada.
+        """
+        self.ended, self.ended_ok = text, ok
+        if time.monotonic() - self.last_poll < 5.0:
+            self.end_seen.wait(wait)
+
+    def retry(self) -> None:
+        """Vuelve a cargar el video donde estaba, tras un corte del receptor."""
+        with self._lock:
+            self._load(self.position() or self._load_target)
 
     def _prepare_subtitles(self) -> None:
         """Fuerza la conversión ahora para fallar acá y no en silencio después."""
@@ -180,7 +233,8 @@ class Session:
                 self.active_sub = None
 
     def _load(self, position: float) -> None:
-        live = not self.plan.seekable
+        self._load_target = position
+        live = not self.seekable
 
         if live:
             # En modo pipe el stream empieza donde arranque ffmpeg. Si copiamos
@@ -243,7 +297,7 @@ class Session:
             if self.media.duration:
                 position = min(position, max(0.0, self.media.duration - 2))
 
-            if self.plan.seekable:
+            if self.seekable:
                 self.caster.seek(position)
             else:
                 # Sin Range no hay seek: reiniciamos ffmpeg desde el offset nuevo.
@@ -305,10 +359,12 @@ class Session:
 
     def snapshot(self) -> dict:
         state = self.caster.player_state
+        failure = getattr(self.caster, "failure", "")
         return {
             "title": self.media.title,
             "device": self.caster.device.name,
             "state": state,
+            "connected": self.caster.connected,
             "playing": state == "PLAYING",
             "buffering": state == "BUFFERING",
             "position": round(self.position(), 2),
@@ -317,12 +373,16 @@ class Session:
             "muted": self.caster.muted,
             "mode": self.plan.mode,
             "mode_detail": self.plan.reasons,
-            "seekable": self.plan.seekable,
+            "seekable": self.seekable,
             "active_sub": self.active_sub,
             "sub_delay": self.sub_delay,
             "subs": [
                 {"id": t.id, "label": t.label, "lang": t.lang, "source": t.source}
                 for t in self.usable_tracks()
             ],
-            "error": self._last_error,
+            # Un corte del receptor pesa más que un subtítulo que no se pudo leer.
+            "error": failure or self._last_error,
+            "error_kind": "playback" if failure else "subtitles" if self._last_error else "",
+            "ended": self.ended,
+            "ended_ok": self.ended_ok,
         }

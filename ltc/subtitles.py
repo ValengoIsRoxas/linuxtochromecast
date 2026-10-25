@@ -109,7 +109,7 @@ class SubTrack:
             if self.source == "external":
                 self._cues = load_file(self.path, self.hint_lang, self.encoding)
             else:
-                self._cues = extract_embedded(media_path, self.stream)
+                self._cues = extract_embedded(media_path, self.stream, self.hint_lang)
         return self._cues
 
     def vtt(self, media_path: Path, shift: float = 0.0) -> str:
@@ -400,15 +400,21 @@ def load_file(path: Path, lang: str = "spa", encoding: str | None = None) -> lis
             return cues
         # Un .srt malformado a veces lo salva ffmpeg; si no, caemos igual abajo.
 
-    # ASS/SSA/SUB y demás los convierte ffmpeg. Le pasamos el texto ya decodificado
-    # en UTF-8 por un temporal, así no tiene que adivinar la codificación de nuevo.
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=path.suffix,
+    return _convert_via_tempfile(text, path.suffix, f"subtitle {path.name}")
+
+
+def _convert_via_tempfile(text: str, suffix: str, what: str) -> list[Cue]:
+    """Convierte texto ya decodificado (ASS/SSA/SUB) a cues, vía un temporal UTF-8.
+
+    Se lo pasamos a ffmpeg ya decodificado en UTF-8 por un temporal, así no
+    tiene que adivinar la codificación de nuevo.
+    """
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=suffix,
                                      delete=False) as tmp:
         tmp.write(text)
         tmp_path = tmp.name
     try:
-        return _ffmpeg_to_cues(["-sub_charenc", "UTF-8", "-i", tmp_path],
-                               f"subtitle {path.name}")
+        return _ffmpeg_to_cues(["-sub_charenc", "UTF-8", "-i", tmp_path], what)
     finally:
         try:
             os.unlink(tmp_path)
@@ -416,18 +422,57 @@ def load_file(path: Path, lang: str = "spa", encoding: str | None = None) -> lis
             pass
 
 
-def extract_embedded(media_path: Path, stream: Stream) -> list[Cue]:
+# Codecs de texto plano (tipo SRT) para los que Matroska/MP4 no garantizan nada:
+# muchos rips viejos los guardan en la codificación original del .srt, aunque el
+# contenedor "debería" llevarlos en UTF-8. A estos hay que aplicarles la misma
+# detección de codificación que a los externos, o los tildes salen mal.
+_UNTRUSTED_EMBEDDED_CODECS = {"subrip", "srt", "ass", "ssa"}
+
+
+def extract_embedded(media_path: Path, stream: Stream, hint_lang: str = "spa") -> list[Cue]:
     """Saca una pista de subtítulos de adentro del contenedor."""
     if stream.is_bitmap_sub:
         raise SubtitleError(
             f"Track '{stream.label()}' is image-based ({stream.codec}) and can't be "
             f"converted to text. Use --burn to burn it into the video."
         )
-    # Los subtítulos dentro de un contenedor ya vienen en UTF-8 por especificación.
-    return _ffmpeg_to_cues(
-        ["-i", str(media_path), "-map", f"0:s:{stream.type_index}"],
-        f"embedded track '{stream.label()}'",
-    )
+    what = f"embedded track '{stream.label()}'"
+
+    if stream.codec.lower() in _UNTRUSTED_EMBEDDED_CODECS:
+        # Extraemos los bytes crudos (sin que ffmpeg los pase por su propio
+        # supuesto de UTF-8) y los decodificamos como a un archivo externo.
+        raw = _ffmpeg_raw_bytes(media_path, stream)
+        text = _decode(raw, hint_lang)
+        suffix = ".ass" if stream.codec.lower() in ("ass", "ssa") else ".srt"
+        if suffix == ".srt":
+            cues = parse_timed_text(text)
+            if cues:
+                return cues
+        return _convert_via_tempfile(text, suffix, what)
+
+    # Otros formatos (mov_text, webvtt...) sí garantizan UTF-8 en su propia
+    # especificación, así que dejamos que ffmpeg los convierta directo.
+    return _ffmpeg_to_cues(["-i", str(media_path), "-map", f"0:s:{stream.type_index}"], what)
+
+
+def _ffmpeg_raw_bytes(media_path: Path, stream: Stream) -> bytes:
+    """Copia la pista de subtítulos tal cual, sin reinterpretar su codificación."""
+    suffix = "ass" if stream.codec.lower() in ("ass", "ssa") else "srt"
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin",
+           "-i", str(media_path), "-map", f"0:s:{stream.type_index}",
+           "-c", "copy", "-f", suffix, "pipe:1"]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, timeout=120)
+    except FileNotFoundError as exc:
+        raise SubtitleError("Couldn't find ffmpeg to convert the subtitles.") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise SubtitleError(f"ffmpeg timed out reading track '{stream.label()}'.") from exc
+
+    if not proc.stdout:
+        err = proc.stderr.decode("utf-8", "replace").strip().splitlines()
+        detail = err[-1] if err else "no details"
+        raise SubtitleError(f"Could not read embedded track '{stream.label()}': {detail}")
+    return proc.stdout
 
 
 def _ffmpeg_to_cues(input_args: list[str], what: str) -> list[Cue]:

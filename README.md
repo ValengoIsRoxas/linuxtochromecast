@@ -54,6 +54,7 @@ ltc movie.mkv --list-tracks    # show what's inside the file and exit
 ltc --list-devices             # show the Chromecasts on your network
 ltc movie.mkv -d "Living"      # pick the device by name
 ltc movie.mkv -t 45:30         # start at 45 minutes 30 seconds
+ltc ~/Videos                   # browse a whole folder from your phone
 ```
 
 While it runs, the terminal accepts:
@@ -73,9 +74,14 @@ While it runs, the terminal accepts:
 ### The web panel
 
 It also opens a control panel in your browser with the same controls. The
-address it prints on startup (`http://192.168.x.x:PORT`) even **works from your
+address it prints on startup (`http://192.168.x.x:8642`) even **works from your
 phone** if it's on the same network, so it doubles as a remote control — pretty
 useful.
+
+The port is always 8642 (unless something else holds it), so save the address
+on your phone's home screen once and it keeps working. The IP part is up to
+your router: give your computer a fixed one with a *DHCP reservation* and the
+address never changes.
 
 <p>
   <img src="docs/img/panel-mobile.png" alt="Web panel on a phone, subtitle sync sheet open" width="280">
@@ -84,6 +90,89 @@ useful.
 
 Subtitle sync gets the most visual weight on purpose — it's the one thing VLC
 can't do. Nudge it in 0.1s or 0.5s steps, or tap the offset itself to reset it.
+
+### Library mode
+
+Point it at a folder instead of a file and it stays running as a little media
+center you drive from your phone:
+
+```bash
+ltc ~/Videos
+```
+
+The panel turns into a library: movies, series grouped by season, and a
+*Continue watching* row. Pick something, choose the subtitles (and the audio
+track, if there's more than one), and it starts on the TV; the regular remote
+is one tap away. It remembers where you left each video, and when an episode
+ends the next one starts on its own (`--no-autoplay` turns that off).
+
+Everything comes from your own files, nothing is looked up online:
+
+- **Names.** Series are recognized by `S01E03`, `1x03`, or a `Season 1` /
+  `Temporada 1` folder; anything else is a movie. Release junk (`1080p`,
+  `BluRay`, `x264`, …) is stripped from titles, and the year is kept.
+- **Artwork.** A `poster.jpg` / `folder.jpg` already in the folder, or
+  `<video>.jpg` next to the file; otherwise a frame grabbed from the video and
+  cached in `~/.cache/ltc/thumbs`.
+- **Progress** lives in `~/.local/share/ltc/progress.json`, keyed by path.
+
+Files the Chromecast can't play as they are get converted first: **Play**
+sends you back to the library, where a striped bar under the poster fills up
+with the conversion (and says how long is left), and the movie starts on the
+TV by itself when it's ready, with real seeking from the first second. If you
+can't wait, *Play right now instead* streams it through the ffmpeg pipe while
+it converts (no seeking until it's done). The red bar under each poster is how
+much of it you've watched.
+
+#### Your own subtitle files
+
+Drop a `.srt` / `.ass` / `.vtt` onto the detail sheet (or tap the dashed box
+to choose one, which is how it works on a phone). It's saved next to the video
+and selected right away. A name like `Movie.es.srt` keeps its language;
+otherwise the track is labelled with the file name. Files that can't be read
+as subtitles are refused instead of saved.
+
+#### Subtitles from OpenSubtitles
+
+The detail sheet has *Find subtitles on OpenSubtitles*. It searches by the
+file's hash first (a match was uploaded for that exact release, so it's in
+sync), then by title, and saves what you pick next to the video as
+`<video>.spa.srt`, after which it's just another local file. This is the
+only thing in library mode that goes online, and only when you press it.
+
+It uses the opensubtitles.com API (the old opensubtitles.org one was shut
+down), which needs an API key to search and a free account to download:
+
+```json
+// ~/.config/ltc/opensubtitles.json
+{"api_key": "…", "username": "…", "password": "…"}
+```
+
+`LTC_OPENSUBTITLES_API_KEY`, `_USERNAME` and `_PASSWORD` work too.
+
+### Saved conversions
+
+Re-encoding an HEVC episode takes minutes, so finished conversions are kept in
+`~/.cache/ltc/converted`. Next time the same file starts instantly, with real
+seeking, in either mode. The key is the source file plus how it was
+converted, so a changed file or a different audio track never gets a stale
+conversion.
+
+The cache keeps up to 40 GB and drops whatever was used longest ago;
+`--cache-size 100` raises that, `--cache-size 0` turns it off. Remuxes aren't
+kept: they redo in seconds and would take as much space as the original.
+
+### Re-encoding on the GPU
+
+When a file has to be re-encoded, ltc uses the GPU, not the CPU. It prefers an
+NVIDIA card (NVENC, with decoding on NVDEC) and falls back to VAAPI (usually
+the integrated graphics of the processor), then to x264 on the CPU. Each
+option is test-encoded once at startup, so a driver that doesn't really work is
+skipped. The terminal shows which one it picked.
+
+`LTC_HWACCEL=vaapi` skips NVENC, `LTC_HWACCEL=nvenc` never falls back to VAAPI,
+and `--no-hwaccel` (or `LTC_NO_HWACCEL=1`) forces the CPU. NVENC needs an ffmpeg
+built with it and the proprietary NVIDIA driver.
 
 ---
 
@@ -218,7 +307,8 @@ ltc movie.mkv --burn 1
       --delay SECONDS     initial subtitle offset
   -a, --audio N           audio track
   -t, --start TIME        start at 90, 1:30 or 1:02:03
-  -p, --port N            local server port
+  -p, --port N            local server port (default 8642; 0 = random)
+      --cache-size GB     disk for saved conversions (default 40; 0 = off)
       --transcode         force re-encoding
       --direct            force direct playback
       --surround          don't downmix multichannel audio to stereo
@@ -246,8 +336,8 @@ header is missing. This program always sends it, so if it happens, check that
 your firewall isn't blocking the local server's port:
 
 ```bash
-sudo firewall-cmd --add-port=8010/tcp   # Fedora, temporary
-ltc movie.mkv -p 8010
+sudo firewall-cmd --add-port=8642/tcp                 # Fedora, until reboot
+sudo firewall-cmd --add-port=8642/tcp --permanent     # and from then on
 ```
 
 **It starts and cuts out after a few seconds.** That's the classic multichannel
@@ -271,6 +361,7 @@ you exactly what's being converted and why.
 ```bash
 ./tests/make_fixtures.sh                              # generate the test videos
 .venv/bin/python tests/test_integration.py tests/media
+.venv/bin/python tests/test_library.py tests/media    # library mode
 ```
 
 This runs the server against a simulated Chromecast and checks what actually
@@ -306,7 +397,13 @@ ltc/
 ├── compat.py       what each device supports and how to get there
 ├── subtitles.py    detection, encoding, conversion, and sync
 ├── transcode.py    building the ffmpeg pipeline
-└── webui.py        web control panel
+├── webui.py        web control panel
+├── library.py      library mode: folder scanning, names, artwork, progress
+├── player.py       library mode: one session after another, next episode
+├── libraryserver.py  library mode: HTTP routes on top of server.py
+├── libraryui.py    library mode: the library page
+├── cache.py        saved conversions, and converting whole files in the background
+└── opensubtitles.py  searching and downloading subtitles from opensubtitles.com
 ```
 
 Source comments are in Spanish.
