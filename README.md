@@ -106,6 +106,11 @@ track, if there's more than one), and it starts on the TV; the regular remote
 is one tap away. It remembers where you left each video, and when an episode
 ends the next one starts on its own (`--no-autoplay` turns that off).
 
+<p>
+  <img src="docs/img/library-mobile.jpg" alt="A movie's detail sheet on a phone: poster, IMDb and Letterboxd links, subtitle choice" width="280">
+  <img src="docs/img/library-desktop.jpg" alt="The library in a browser: series and movies with their posters" width="560">
+</p>
+
 Everything comes from your own files; the only thing looked up online is
 the artwork:
 
