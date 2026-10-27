@@ -162,6 +162,11 @@ def build_tree(root: Path) -> None:
 
 def test_names():
     print("\n\033[1mNombres de archivo\033[0m")
+    check("«Criterion Collection» no queda en el título",
+          parse_movie("Seven.Samurai.1954.Criterion.Collection.1080p.BluRay") == ("Seven Samurai", 1954))
+    check("ni cuando va adelante", parse_movie("The Criterion Collection - Rashomon (1950)")
+          == ("Rashomon", 1950), str(parse_movie("The Criterion Collection - Rashomon (1950)")))
+    check("ni sin año", parse_movie("Ikiru Criterion 1080p") == ("Ikiru", None))
     ep = parse_episode("Dark.S01E03.Past.and.Present.1080p.WEB-DL")
     check("SxxEyy", ep is not None and (ep.show, ep.season, ep.episode) == ("Dark", 1, 3),
           str(ep))
@@ -640,8 +645,8 @@ def test_cache(root: Path, data: Path):
 class FakeOpenSubtitles(osub.OpenSubtitles):
     """La API de OpenSubtitles simulada: anota los pedidos y responde enlatado."""
 
-    def __init__(self):
-        super().__init__(osub.Credentials(api_key="k", username="u", password="p"))
+    def __init__(self, index_path):
+        super().__init__(osub.Credentials(api_key="k", username="u", password="p"), index_path)
         self.calls: list[tuple] = []
 
     def _request(self, method, url, body=None, auth=False):
@@ -675,7 +680,7 @@ def test_opensubtitles(root: Path, data: Path):
 
     lib = Library.scan(root)
     movie = lib.movies[0]
-    api = FakeOpenSubtitles()
+    api = FakeOpenSubtitles(data / "os-downloads.json")
     results = api.search(movie.path, title=movie.title, year=movie.year, languages=["es", "en"])
     url = api.calls[-1][1]
     params = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
@@ -716,6 +721,14 @@ def test_opensubtitles(root: Path, data: Path):
         status, again = post(f"{base}/api/item/{movie.id}/subtitles", {"file_id": 2, "language": "es"})
         check("una segunda descarga no pisa la primera",
               again["file"] == f"{movie.path.stem}.2.spa.srt", again.get("file", ""))
+        before = len(api.calls)
+        status, repeat = post(f"{base}/api/item/{movie.id}/subtitles", {"file_id": 3, "language": "es"})
+        check("bajar el mismo subtítulo otra vez devuelve el que ya está, sin pedir nada",
+              repeat.get("file") == target.name and len(api.calls) == before
+              and not list(movie.path.parent.glob("*.3.spa.srt")), str(repeat))
+        flagged = {r["file_id"] for r in api.search(movie.path, title=movie.title, year=movie.year,
+                                                    languages=["es"]) if r["downloaded"]}
+        check("y la búsqueda marca los ya bajados", flagged == {3, 2}, str(flagged))
         srt = "1\n00:00:01,000 --> 00:00:02,000\nArrastrado\n".encode("latin-1")
         def upload(name, body):
             req = urllib.request.Request(
@@ -746,7 +759,7 @@ def test_opensubtitles(root: Path, data: Path):
         sin_key.search(movie.path, title="x", languages=["es"])
         check("sin API key avisa qué falta", False)
     except osub.OpenSubtitlesError as exc:
-        check("sin API key avisa qué falta", "opensubtitles.json" in str(exc), str(exc))
+        check("sin API key avisa qué falta", "opensubtitles.api_key" in str(exc), str(exc))
 
 
 if __name__ == "__main__":

@@ -25,14 +25,14 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import config
 from .compat import Plan
 from .logutil import get_logger
 from .probe import MediaInfo
-from .transcode import PrepareError, detect_hw_encoder, encode_whole, spool_dir
+from .transcode import PrepareError, detect_hw_encoder, encode_whole
 
 log = get_logger("cache")
 
-DEFAULT_LIMIT_GB = 40.0
 # Subirlo invalida todo lo guardado: para cuando cambie cómo se arma el MP4.
 FORMAT_VERSION = 1
 
@@ -58,8 +58,11 @@ def plan_key(media: MediaInfo, plan: Plan) -> str:
 
 
 class ConversionCache:
-    def __init__(self, limit_gb: float = DEFAULT_LIMIT_GB, directory: Path | None = None):
-        self.directory = directory or (spool_dir() / "converted")
+    def __init__(self, limit_gb: float | None = None, directory: Path | None = None):
+        cfg = config.get()
+        self.directory = directory or cfg.converted_path
+        if limit_gb is None:
+            limit_gb = cfg.cache_limit_gb
         self.limit = int(max(0.0, limit_gb) * 1024 ** 3)
         self._lock = threading.Lock()
 
@@ -97,13 +100,13 @@ class ConversionCache:
         try:
             self.directory.mkdir(parents=True, exist_ok=True)
             try:
-                # Normalmente los dos cuelgan de ~/.cache/ltc: un rename
+                # Normalmente los dos están en el mismo disco: un rename
                 # instantáneo, no una copia de un giga.
                 os.replace(encoded, target)
             except OSError as exc:
                 if exc.errno != errno.EXDEV:
                     raise
-                # Otro sistema de archivos (XDG_CACHE_HOME en otro disco):
+                # Otro sistema de archivos (una carpeta de conversiones en otro disco):
                 # copia a un temporal al lado y rename, para que nunca se vea
                 # un MP4 a medio copiar con el nombre definitivo.
                 partial = target.with_suffix(".part")

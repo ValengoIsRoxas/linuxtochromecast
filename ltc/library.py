@@ -31,6 +31,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import config
 from .logutil import get_logger
 
 log = get_logger("library")
@@ -42,8 +43,6 @@ VIDEO_EXTENSIONS = {
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
 POSTER_NAMES = ("poster", "folder", "cover", "show")
 
-_CACHE = Path(os.environ.get("XDG_CACHE_HOME", "~/.cache")).expanduser() / "ltc"
-_DATA = Path(os.environ.get("XDG_DATA_HOME", "~/.local/share")).expanduser() / "ltc"
 
 # --- nombres --------------------------------------------------------------------
 
@@ -64,6 +63,9 @@ _QUALITY = re.compile(
     r"bdrip|brrip|bdremux|remux|web-?dl|webrip|hdtv|hdrip|dvdrip|x264|x265|"
     r"h ?264|h ?265|hevc|xvid|10bit|aac|e?ac3|dts|ddp?5 ?1|proper|repack|"
     r"unrated|imax|multi|dual|latino|castellano|subbed|dubbed)(?![a-z0-9])")
+# "Seven.Samurai.1954.Criterion.1080p", "The Criterion Collection - Rashomon":
+# la etiqueta se quita del título en vez de cortar ahí, porque puede venir adelante.
+_CRITERION_TAG = re.compile(r"(?i)(?<![a-z])(?:the[ ._-]+)?criterion(?:[ ._-]+collection)?(?![a-z])")
 _LEADING_GROUP = re.compile(r"^\s*\[[^\]]*\]\s*")
 _SAMPLE = re.compile(r"(?i)(?<![a-z])sample(?![a-z])")
 # "Star Trek TNG Season 4 (1080p x265)" o "Dark.S01.1080p": la temporada en
@@ -92,6 +94,7 @@ def clean_name(text: str) -> str:
     text = text.replace("_", " ")
     if " " not in text.strip():
         text = text.replace(".", " ")
+    text = _CRITERION_TAG.sub(" ", text)
     cut = _QUALITY.search(text)
     if cut:
         text = text[:cut.start()]
@@ -383,7 +386,7 @@ class Thumbnailer:
     """Saca un cuadro del video con ffmpeg y lo guarda en caché."""
 
     def __init__(self, cache_dir: Path | None = None, width: int = 480):
-        self.cache_dir = cache_dir or (_CACHE / "thumbs")
+        self.cache_dir = cache_dir or (config.get().cache_path / "thumbs")
         self.width = width
         # ffmpeg decodificando en paralelo una grilla entera tira abajo la
         # máquina; dos a la vez alcanza para que la página se vaya llenando.
@@ -483,7 +486,7 @@ class ProgressStore:
     """
 
     def __init__(self, path: Path | None = None, save_every: float = 10.0):
-        self.path = path or (_DATA / "progress.json")
+        self.path = path or (config.data_dir() / "progress.json")
         self.save_every = save_every
         self._lock = threading.Lock()
         self._dirty = False

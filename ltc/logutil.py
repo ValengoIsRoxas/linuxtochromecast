@@ -9,23 +9,24 @@ vez de a stdout, para poder mirarlo después de que ya pasó.
 from __future__ import annotations
 
 import logging
-import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-LOG_PATH = Path(os.environ.get("XDG_CACHE_HOME", "~/.cache")).expanduser() / "ltc" / "ltc.log"
-
 _configured = False
+_path: Path | None = None
 
 
 def setup_logging(level: int = logging.INFO) -> Path:
-    """Prepara el logger `ltc`, escribiendo a `LOG_PATH`. Idempotente."""
-    global _configured
+    """Prepara el logger `ltc`, escribiendo al log de la configuración. Idempotente."""
+    global _configured, _path
     if _configured:
-        return LOG_PATH
+        return _path
 
-    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    handler = RotatingFileHandler(LOG_PATH, maxBytes=1_000_000, backupCount=3,
+    # Acá y no arriba: la configuración también usa este módulo para loguear.
+    from . import config
+    _path = config.get().log_path
+    _path.parent.mkdir(parents=True, exist_ok=True)
+    handler = RotatingFileHandler(_path, maxBytes=1_000_000, backupCount=3,
                                   encoding="utf-8")
     handler.setFormatter(logging.Formatter(
         "%(asctime)s %(levelname)s %(name)s: %(message)s"))
@@ -34,7 +35,7 @@ def setup_logging(level: int = logging.INFO) -> Path:
     logger.setLevel(level)
     logger.addHandler(handler)
     _configured = True
-    return LOG_PATH
+    return _path
 
 
 def get_logger(name: str) -> logging.Logger:

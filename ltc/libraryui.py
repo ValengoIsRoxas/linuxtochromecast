@@ -816,8 +816,8 @@ function osSection(d) {
   let html = '<div class="os-box">';
   if (!cfg.search) {
     html += '<div class="d-note">Searching OpenSubtitles needs an API key. Put it in '
-      + '<code>~/.config/ltc/opensubtitles.json</code> as <code>{"api_key": "…", "username": "…", "password": "…"}</code> '
-      + '(the account, free at opensubtitles.com, is what downloads count against).</div>';
+      + '<code>~/.config/ltc/config.toml</code> under <code>[opensubtitles]</code> (<code>api_key</code>, <code>username</code>, <code>password</code>), '
+      + 'or run <code>ltc setup</code>. The account, free at opensubtitles.com, is what downloads count against.</div>';
   } else if (os.loading) {
     html += '<div class="d-note">Searching OpenSubtitles…</div>';
   } else if (os.error) {
@@ -825,10 +825,10 @@ function osSection(d) {
   } else if (!os.results.length) {
     html += '<div class="d-note">Nothing found for this one.</div>';
   } else {
-    if (!os.canDownload) html += '<div class="d-note">To download, add your opensubtitles.com username and password to <code>~/.config/ltc/opensubtitles.json</code>.</div>';
+    if (!os.canDownload) html += '<div class="d-note">To download, add your opensubtitles.com <code>username</code> and <code>password</code> to <code>[opensubtitles]</code> in <code>~/.config/ltc/config.toml</code>.</div>';
     html += '<div class="os-list">';
     for (const r of os.results) {
-      const tags = [r.hash_match ? '<b>matches this file</b>' : '', r.downloads ? r.downloads.toLocaleString() + ' downloads' : '',
+      const tags = [r.downloaded ? '<b>already downloaded</b>' : '', r.hash_match ? '<b>matches this file</b>' : '', r.downloads ? r.downloads.toLocaleString() + ' downloads' : '',
         r.hearing_impaired ? 'hearing impaired' : '', r.machine ? 'machine translated' : ''].filter(Boolean).join(' · ');
       const busy = os.downloading === r.file_id;
       html += '<button class="os-row" data-osfile="' + r.file_id + '" data-oslang="' + esc(r.language) + '"'

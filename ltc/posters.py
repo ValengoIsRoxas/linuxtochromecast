@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
 
-from . import __version__
+from . import __version__, config
 from .logutil import get_logger
 
 log = get_logger("posters")
@@ -49,7 +49,6 @@ MISS_TTL = 7 * 24 * 3600
 # timeout: después de un error de red se deja de intentar un rato.
 OFFLINE_BACKOFF = 120.0
 
-_CACHE = Path(os.environ.get("XDG_CACHE_HOME", "~/.cache")).expanduser() / "ltc"
 
 
 @dataclass
@@ -119,7 +118,7 @@ def _http_get(url: str, timeout: float = TIMEOUT) -> bytes:
 class Posters:
     def __init__(self, cache_dir: Path | None = None, enabled: bool = True,
                  fetch=None):
-        self.dir = cache_dir or (_CACHE / "posters")
+        self.dir = cache_dir or (config.get().cache_path / "posters")
         self.enabled = enabled
         self._fetch = fetch or _http_get
         self._index_path = self.dir / "index.json"

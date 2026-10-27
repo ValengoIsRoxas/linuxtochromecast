@@ -7,11 +7,12 @@ queda es la REST de opensubtitles.com, con la misma base de subtítulos. Pide:
   * una cuenta de opensubtitles.com, para bajar: el endpoint de descarga
     exige el token de sesión, y la cuota diaria va por cuenta.
 
-Las dos cosas se leen de `~/.config/ltc/opensubtitles.json`:
+Las dos cosas se leen, de más a menos prioridad, de las variables
+LTC_OPENSUBTITLES_API_KEY / _USERNAME / _PASSWORD, de la sección
+`[opensubtitles]` de `~/.config/ltc/config.toml` (`ltc config set
+opensubtitles.api_key ...`) o del `~/.config/ltc/opensubtitles.json` de antes:
 
     {"api_key": "...", "username": "...", "password": "..."}
-
-o de las variables LTC_OPENSUBTITLES_API_KEY / _USERNAME / _PASSWORD.
 
 Lo bajado se guarda al lado del video como `<video>.<idioma>.srt`, que es
 justo lo que `subtitles.find_external` ya encuentra: después de la primera
@@ -34,7 +35,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import __version__
+from . import __version__, config
 from .logutil import get_logger
 
 log = get_logger("opensubtitles")
@@ -47,6 +48,7 @@ USER_AGENT = f"ltc v{__version__}"
 DEFAULT_API_KEY = ""
 CONFIG_PATH = Path(os.environ.get("XDG_CONFIG_HOME", "~/.config")).expanduser() \
     / "ltc" / "opensubtitles.json"
+# Qué file_id ya se bajó para cada video, para no repetirlo (ni gastar cuota).
 
 # ISO 639-2 (lo que usan ffprobe y los nombres de archivo) ↔ códigos de la API.
 _TO_API = {
@@ -106,17 +108,22 @@ class Credentials:
             pass
         except (OSError, ValueError) as exc:
             log.warning("No se pudo leer %s: %s", path, exc)
-        env = os.environ.get
+        env, cfg = os.environ.get, config.get()
         return cls(
-            api_key=env("LTC_OPENSUBTITLES_API_KEY") or data.get("api_key") or DEFAULT_API_KEY,
-            username=env("LTC_OPENSUBTITLES_USERNAME") or data.get("username", ""),
-            password=env("LTC_OPENSUBTITLES_PASSWORD") or data.get("password", ""),
+            api_key=env("LTC_OPENSUBTITLES_API_KEY") or cfg.opensubtitles_api_key
+            or data.get("api_key") or DEFAULT_API_KEY,
+            username=env("LTC_OPENSUBTITLES_USERNAME") or cfg.opensubtitles_username
+            or data.get("username", ""),
+            password=env("LTC_OPENSUBTITLES_PASSWORD") or cfg.opensubtitles_password
+            or data.get("password", ""),
         )
 
 
 class OpenSubtitles:
-    def __init__(self, credentials: Credentials | None = None):
+    def __init__(self, credentials: Credentials | None = None,
+                 index_path: Path | None = None):
         self.credentials = credentials or Credentials.load()
+        self.index_path = index_path or config.get().cache_path / "opensubtitles-downloads.json"
         self._token = ""
         self._base = API
         self._lock = threading.Lock()
@@ -173,7 +180,7 @@ class OpenSubtitles:
             c = self.credentials
             if not (c.username and c.password):
                 raise OpenSubtitlesError(
-                    f"Downloading needs an opensubtitles.com account in {CONFIG_PATH}")
+                    "Downloading needs an opensubtitles.com account: ltc config set opensubtitles.username NAME, opensubtitles.password PASS")
             data = self._request("POST", f"{API}/login",
                                  {"username": c.username, "password": c.password})
             self._token = data.get("token", "")
@@ -190,7 +197,7 @@ class OpenSubtitles:
                season: int | None = None, episode: int | None = None,
                languages: list[str]) -> list[dict]:
         if not self.can_search:
-            raise OpenSubtitlesError(f"No OpenSubtitles API key; see {CONFIG_PATH}")
+            raise OpenSubtitlesError("No OpenSubtitles API key; set it with: ltc config set opensubtitles.api_key KEY")
         params: dict[str, str] = {"languages": ",".join(languages), "query": title.lower()}
         try:
             params["moviehash"] = movie_hash(video)
@@ -219,6 +226,7 @@ class OpenSubtitles:
                 "hash_match": bool(attrs.get("moviehash_match")),
                 "hearing_impaired": bool(attrs.get("hearing_impaired")),
                 "machine": bool(attrs.get("ai_translated") or attrs.get("machine_translated")),
+                "downloaded": self.downloaded(video, files[0].get("file_id")) is not None,
             })
         order = {lang: i for i, lang in enumerate(languages)}
         results.sort(key=lambda r: (not r["hash_match"], r["machine"],
@@ -226,7 +234,13 @@ class OpenSubtitles:
         return results[:40]
 
     def download(self, file_id: int, video: Path, language: str) -> Path:
-        """Baja el subtítulo y lo deja al lado del video. Devuelve la ruta."""
+        """Baja el subtítulo y lo deja al lado del video. Devuelve la ruta.
+
+        Si ese mismo subtítulo ya se bajó y el archivo sigue ahí, devuelve el
+        existente sin pedir nada."""
+        previous = self.downloaded(video, file_id)
+        if previous is not None:
+            return previous
         data = self._request("POST", f"{self._base}/download",
                              {"file_id": int(file_id)}, auth=True)
         link = data.get("link")
@@ -240,10 +254,34 @@ class OpenSubtitles:
         target = _free_name(video, file_language(language), ext)
         # Los bytes tal cual: la detección de codificación ya la hace subtitles.
         target.write_bytes(content)
+        self._remember(video, file_id, target)
         log.info("Subtítulo de OpenSubtitles guardado en %s (quedan %s descargas hoy)",
                  target.name, data.get("remaining", "?"))
         return target
 
+    # --- registro de lo bajado ---
+
+    def _index(self) -> dict:
+        try:
+            return json.loads(self.index_path.read_text("utf-8"))
+        except (OSError, ValueError):
+            return {}
+
+    def downloaded(self, video: Path, file_id) -> Path | None:
+        """El archivo de una descarga anterior de este `file_id`, si sigue ahí."""
+        name = self._index().get(str(video), {}).get(str(file_id))
+        path = video.with_name(name) if name else None
+        return path if path is not None and path.is_file() else None
+
+    def _remember(self, video: Path, file_id, target: Path) -> None:
+        with self._lock:
+            index = self._index()
+            index.setdefault(str(video), {})[str(file_id)] = target.name
+            try:
+                self.index_path.parent.mkdir(parents=True, exist_ok=True)
+                self.index_path.write_text(json.dumps(index), "utf-8")
+            except OSError as exc:
+                log.warning("No se pudo guardar %s: %s", self.index_path, exc)
 
     def _fetch(self, link: str) -> bytes:
         req = urllib.request.Request(link, headers={"User-Agent": USER_AGENT})

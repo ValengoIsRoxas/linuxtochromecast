@@ -1,127 +1,152 @@
 #!/usr/bin/env bash
-# Instala ltc y la opción "Enviar a Chromecast" del gestor de archivos.
-# Todo va al home del usuario: no pide sudo ni toca el sistema.
+# Instala ltc con pipx y lanza el asistente de configuración (`ltc setup`).
+#
+#   ./install.sh            instala y pregunta lo que se puede configurar
+#   ./install.sh --yes      sin preguntas: todo por defecto
+#   ./install.sh --dev      instala editable: los cambios al código se ven al toque
+#   ./install.sh --no-setup instala y no corre el asistente (después: ltc setup)
+#
+# Todo va al home del usuario. Sólo pide sudo, y sólo si se acepta, para
+# instalar paquetes del sistema que falten (ffmpeg, pipx).
 
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN="$HOME/.local/bin"
-VENV="$HERE/.venv"
+PACKAGE="linuxtochromecast"
+
+YES=0; DEV=0; SETUP=1
+for arg in "$@"; do
+    case "$arg" in
+        -y|--yes)    YES=1 ;;
+        --dev)       DEV=1 ;;
+        --no-setup)  SETUP=0 ;;
+        -h|--help)   sed -n '2,10p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) echo "Unknown option: $arg (see --help)" >&2; exit 2 ;;
+    esac
+done
 
 bold() { printf '\033[1m%s\033[0m\n' "$1"; }
 ok()   { printf '  \033[32m✓\033[0m %s\n' "$1"; }
 warn() { printf '  \033[33m!\033[0m %s\n' "$1"; }
 die()  { printf '\n\033[31m✗\033[0m %s\n' "$1" >&2; exit 1; }
 
-bold "Instalando linuxtochromecast"
+# Pregunta sí/no. Sin terminal, o con --yes, responde que sí.
+confirm() {
+    [[ $YES -eq 1 || ! -t 0 ]] && return 0
+    local answer
+    read -r -p "  $1 [Y/n] " answer || return 0
+    [[ -z "$answer" || "$answer" =~ ^[YySs] ]]
+}
+
+bold "Installing linuxtochromecast"
 echo
 
-# --- dependencias del sistema ---
+# --- gestor de paquetes (sólo para sugerir o instalar lo que falte) ---
 
-command -v python3 >/dev/null || die "Falta python3."
+PM=""
+for candidate in dnf apt-get pacman zypper; do
+    command -v "$candidate" >/dev/null && { PM="$candidate"; break; }
+done
 
+# system_install FFMPEG_PKG PIPX_PKG... según la distro; devuelve 1 si no sabe.
+system_install() {
+    case "$PM" in
+        dnf)     sudo dnf install -y "$@" ;;
+        apt-get) sudo apt-get install -y "$@" ;;
+        pacman)  sudo pacman -S --needed --noconfirm "$@" ;;
+        zypper)  sudo zypper install -y "$@" ;;
+        *)       return 1 ;;
+    esac
+}
+
+pkg_name() {   # pkg_name ffmpeg|pipx
+    case "$PM:$1" in
+        dnf:ffmpeg)     echo ffmpeg-free ;;
+        dnf:pipx|apt-get:pipx)   echo pipx ;;
+        pacman:pipx)    echo python-pipx ;;
+        zypper:pipx)    echo python3-pipx ;;
+        *)              echo "$1" ;;
+    esac
+}
+
+need() {   # need ffmpeg|pipx
+    local what="$1" pkg
+    pkg="$(pkg_name "$what")"
+    echo
+    if [[ -n "$PM" ]] && confirm "$what is missing. Install it now ($PM install $pkg, asks for your password)?"; then
+        system_install "$pkg" || die "Couldn't install $pkg. Install $what yourself and run this again."
+    else
+        die "$what is required. Install it and run this script again."
+    fi
+}
+
+# --- Python ---
+
+command -v python3 >/dev/null || die "python3 is missing."
 PYVER="$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
-python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' \
-    || die "Necesito Python 3.10 o más nuevo (tenés $PYVER)."
+python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' \
+    || die "ltc needs Python 3.11 or newer (you have $PYVER). Install a newer python3 from your distro."
 ok "python3 $PYVER"
 
+# --- ffmpeg ---
+
 if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
-    echo
-    warn "Falta ffmpeg. Instalalo con alguno de estos:"
-    echo "      Fedora:        sudo dnf install ffmpeg-free"
-    echo "      Ubuntu/Debian: sudo apt install ffmpeg"
-    echo "      Arch:          sudo pacman -S ffmpeg"
-    die "Instalá ffmpeg y volvé a correr este script."
+    need ffmpeg
 fi
 ok "ffmpeg $(ffmpeg -version | head -1 | awk '{print $3}')"
 
-# --- entorno virtual ---
+# --- pipx ---
 
-if [[ ! -d "$VENV" ]]; then
-    python3 -m venv "$VENV" || die "No pude crear el entorno virtual en $VENV"
-fi
-"$VENV/bin/pip" install --quiet --upgrade pip >/dev/null 2>&1 || true
-"$VENV/bin/pip" install --quiet -r "$HERE/requirements.txt" \
-    || die "Falló la instalación de dependencias de Python."
-ok "dependencias de Python instaladas"
+command -v pipx >/dev/null || need pipx
+ok "pipx $(pipx --version)"
 
-# --- comandos ---
+# --- instalación anterior (script con venv dentro del repo) ---
+# Ese `ltc` era un wrapper generado por la versión vieja de este script; pipx
+# no pisa un archivo ajeno, así que se quita.
 
-mkdir -p "$BIN"
-
-cat > "$BIN/ltc" <<EOF
-#!/usr/bin/env bash
-# Generado por install.sh de linuxtochromecast
-exec "$VENV/bin/python" -m ltc "\$@"
-EOF
-chmod +x "$BIN/ltc"
-
-install -m 755 "$HERE/integration/ltc-open" "$BIN/ltc-open"
-ok "comandos ltc y ltc-open en $BIN"
-
-# El módulo tiene que ser importable desde el venv. Un .pth apuntando al
-# directorio del proyecto alcanza, y así los cambios en el código se ven al toque
-# sin tener que reinstalar nada.
-SITE="$("$VENV/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
-[[ -d "$SITE" ]] || die "No encontré site-packages en el entorno virtual."
-echo "$HERE" > "$SITE/linuxtochromecast.pth"
-
-# --- integración con el gestor de archivos ---
-
-APPS="$HOME/.local/share/applications"
-mkdir -p "$APPS"
-install -m 644 "$HERE/integration/linuxtochromecast.desktop" \
-    "$APPS/linuxtochromecast.desktop"
-command -v update-desktop-database >/dev/null && \
-    update-desktop-database "$APPS" >/dev/null 2>&1 || true
-ok "«Abrir con → Enviar a Chromecast» (todos los gestores)"
-
-# Nautilus (GNOME): aparece en clic derecho → Scripts
-NAUTILUS="$HOME/.local/share/nautilus/scripts"
-if [[ -d "$HOME/.local/share/nautilus" ]] || command -v nautilus >/dev/null; then
-    mkdir -p "$NAUTILUS"
-    cat > "$NAUTILUS/Enviar a Chromecast" <<EOF
-#!/usr/bin/env bash
-# Generado por install.sh de linuxtochromecast
-IFS=\$'\n'
-for f in \$NAUTILUS_SCRIPT_SELECTED_FILE_PATHS; do
-    [[ -n "\$f" ]] && exec "$BIN/ltc-open" "\$f"
-done
-EOF
-    chmod +x "$NAUTILUS/Enviar a Chromecast"
-    ok "Nautilus: clic derecho → Scripts → Enviar a Chromecast"
+OLD="$HOME/.local/bin/ltc"
+if [[ -f "$OLD" && ! -L "$OLD" ]] && grep -q "Generado por install.sh" "$OLD" 2>/dev/null; then
+    rm -f "$OLD"
+    ok "removed the wrapper from the previous installation (the repo's .venv is no longer used)"
 fi
 
-# Dolphin (KDE)
-if command -v dolphin >/dev/null || [[ -d "$HOME/.local/share/kio" ]]; then
-    KIO="$HOME/.local/share/kio/servicemenus"
-    mkdir -p "$KIO"
-    install -m 755 "$HERE/integration/linuxtochromecast-servicemenu.desktop" \
-        "$KIO/linuxtochromecast.desktop"
-    ok "Dolphin: clic derecho → Enviar a Chromecast"
-fi
+# --- ltc ---
 
-# Thunar (XFCE) guarda sus acciones en un XML propio; lo dejamos documentado.
-if command -v thunar >/dev/null; then
-    warn "Thunar: agregá la acción a mano en Editar → Acciones personalizadas"
-    echo "        Comando:  ltc-open %f     Patrón: *    Marcar: Archivos de vídeo"
-fi
+SRC=("$HERE")
+[[ $DEV -eq 1 ]] && SRC=(--editable "$HERE")
+pipx install --force --python "$(command -v python3)" "${SRC[@]}" >/dev/null \
+    || die "pipx couldn't install ltc. Run: pipx install --force $HERE   to see why."
+ok "ltc installed with pipx$([[ $DEV -eq 1 ]] && echo ' (editable)')"
 
-# --- PATH ---
+BIN="$(pipx environment --value PIPX_BIN_DIR 2>/dev/null || true)"
+BIN="${BIN:-$HOME/.local/bin}"
+[[ -x "$BIN/ltc" ]] || die "ltc isn't in $BIN after installing; run: pipx list"
 
-echo
-if ! printf '%s' ":$PATH:" | grep -q ":$BIN:"; then
-    warn "$BIN no está en tu PATH. Agregalo con:"
-    echo
-    echo "    echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.bashrc && exec bash"
-    echo
+pipx ensurepath >/dev/null 2>&1 || true
+ON_PATH=1
+case ":$PATH:" in *":$BIN:"*) ;; *) ON_PATH=0 ;; esac
+
+# --- asistente ---
+
+if [[ $SETUP -eq 1 ]]; then
+    ARGS=()
+    [[ $YES -eq 1 ]] && ARGS+=(--yes)
+    "$BIN/ltc" setup ${ARGS[@]+"${ARGS[@]}"}
 else
-    ok "$BIN ya está en el PATH"
+    echo
+    echo "  Run  ltc setup  to choose folders, device and the rest."
 fi
 
-bold "Listo."
+if [[ $ON_PATH -eq 0 ]]; then
+    echo
+    warn "$BIN wasn't on your PATH. pipx added it for new terminals:"
+    echo "      open a new terminal, or run:  export PATH=\"$BIN:\$PATH\""
+fi
+
 echo
-echo "  ltc pelicula.mkv              transmitir con subtítulos"
-echo "  ltc pelicula.mkv --list-tracks  ver las pistas del archivo"
-echo "  ltc --list-devices            ver los Chromecast de la red"
+bold "Done."
+echo "  ltc                   open your library"
+echo "  ltc movie.mkv         cast one file"
+echo "  ltc config            change settings"
+echo "  ltc uninstall         remove everything"
 echo

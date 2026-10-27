@@ -28,6 +28,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import config
 from .compat import Plan
 from .logutil import get_logger
 from .probe import MediaInfo
@@ -547,9 +548,10 @@ def spool_dir() -> Path:
     """Dónde van los archivos intermedios.
 
     A propósito NO en /tmp: en varias distros (Fedora incluida) es tmpfs, o
-    sea RAM, y un episodio reencodado pasa el gigabyte.
+    sea RAM, y un episodio reencodado pasa el gigabyte. Va junto a las
+    conversiones guardadas, en el disco que se haya elegido para ellas.
     """
-    d = Path(os.environ.get("XDG_CACHE_HOME", "~/.cache")).expanduser() / "ltc"
+    d = config.get().spool_path
     d.mkdir(parents=True, exist_ok=True)
     return d
 

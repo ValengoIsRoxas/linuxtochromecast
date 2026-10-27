@@ -16,37 +16,24 @@ import webbrowser
 from pathlib import Path
 
 from . import __version__
-from .cache import DEFAULT_LIMIT_GB, ConversionCache
+from . import config
+from .cache import ConversionCache
 from .caster import (
     CastError, Caster, looks_like_host, discover, local_ip_towards,
 )
 from .library import Library, ProgressStore
 from .libraryserver import serve_library
-from .logutil import LOG_PATH, setup_logging
+from .logutil import setup_logging
 from .player import PlayOptions, Player
 from .posters import Posters
 from .probe import ProbeError, probe
 from .server import serve
 from .session import Session
 from .subtitles import collect_tracks
+from .term import _TTY, bold, cyan, dim, green, red, yellow
 from .transcode import PrepareError, detect_hw_encoder, encode_whole
 
 # --- salida con color -----------------------------------------------------------
-
-_TTY = sys.stdout.isatty()
-
-
-def _c(text: str, code: str) -> str:
-    return f"\033[{code}m{text}\033[0m" if _TTY else text
-
-
-def bold(t): return _c(t, "1")
-def dim(t): return _c(t, "2")
-def cyan(t): return _c(t, "36")
-def green(t): return _c(t, "32")
-def yellow(t): return _c(t, "33")
-def red(t): return _c(t, "31")
-
 
 def progress(text: str) -> None:
     """Avisa en qué paso estamos.
@@ -96,12 +83,14 @@ def parse_time(value: str) -> float:
 
 # --- argumentos -----------------------------------------------------------------
 
-# Un puerto fijo hace que la dirección del panel sea siempre la misma, así se
-# puede guardar en el celular. El 8009 es del Chromecast; este está libre en
-# casi cualquier máquina.
-DEFAULT_PORT = 8642
+# Subcomandos: se atienden antes del parser, que toma la primera palabra como
+# el video. Un archivo que se llame igual se abre con ./config.
+COMMANDS = ("config", "setup", "uninstall")
 
-def build_parser() -> argparse.ArgumentParser:
+
+def build_parser(cfg: config.Config | None = None) -> argparse.ArgumentParser:
+    """El parser, con los valores por defecto que salen de la configuración."""
+    cfg = cfg or config.get()
     p = argparse.ArgumentParser(
         prog="ltc",
         description="Cast a video to your Chromecast with subtitles already working.",
@@ -112,12 +101,22 @@ def build_parser() -> argparse.ArgumentParser:
             "  ltc movie.mp4 -d \"TV Living\"      pick the device\n"
             "  ltc movie.mkv --list-tracks       list the file's tracks and exit\n"
             "  ltc ~/Movies                      browse a folder from your phone\n"
+            "  ltc                               browse the folder set in the configuration\n"
+            "\n"
+            "Other commands:\n"
+            "  ltc setup        guided setup: folders, device, firewall, file manager\n"
+            "  ltc config       show or change the configuration\n"
+            "  ltc uninstall    remove ltc and what it set up\n"
+            "\n"
+            "Defaults come from the configuration file (ltc config); these options "
+            "override it for one run.\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("video", nargs="?",
-                   help="Video file to cast, or a folder to browse as a library")
-    p.add_argument("-d", "--device", metavar="NAME",
+                   help="Video file to cast, or a folder to browse as a library "
+                        "(none: the library folder from the configuration)")
+    p.add_argument("-d", "--device", metavar="NAME", default=cfg.device or None,
                    help="Chromecast name (a partial match works), or its IP")
     p.add_argument("-s", "--sub", metavar="N|FILE",
                    help="Subtitle to use: the number shown by --list-tracks, "
@@ -125,9 +124,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-subs", action="store_true", help="Start with subtitles off")
     p.add_argument("--burn", type=int, metavar="N",
                    help="Burn track N into the video (for image-based subtitles)")
-    p.add_argument("--sub-lang", default="spa", metavar="CODE",
-                   help="Preferred language when auto-selecting a subtitle (default: spa)")
-    p.add_argument("--sub-scale", type=float, default=1.0, metavar="F",
+    p.add_argument("--sub-lang", default=cfg.sub_lang, metavar="CODE",
+                   help="Preferred language when auto-selecting a subtitle "
+                        f"(default: {cfg.sub_lang})")
+    p.add_argument("--sub-scale", type=float, default=cfg.sub_scale, metavar="F",
                    help="Subtitle size, 1.0 = normal")
     p.add_argument("--sub-encoding", metavar="CODE",
                    help="Force the encoding of external .srt files (e.g. cp1252, utf-8)")
@@ -138,27 +138,33 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-t", "--start", type=parse_time, default=0.0, metavar="TIME",
                    help="Start at a given point: 90, 1:30 or 1:02:03")
     p.add_argument("-p", "--port", type=int, default=None,
-                   help=f"Local server port (default: {DEFAULT_PORT}, or any free "
+                   help=f"Local server port (default: {cfg.port}, or any free "
                         f"one if it's taken; 0 = always a random one)")
     p.add_argument("--transcode", action="store_true",
                    help="Force re-encoding even if the file looks compatible")
     p.add_argument("--direct", action="store_true",
                    help="Force direct playback, bypassing ffmpeg")
-    p.add_argument("--surround", action="store_true",
+    p.add_argument("--surround", action="store_true", default=cfg.surround,
                    help="Don't downmix multichannel audio to stereo")
+    p.add_argument("--no-surround", dest="surround", action="store_false",
+                   help=argparse.SUPPRESS)
     p.add_argument("--no-wait", action="store_true",
                    help="Start casting immediately instead of re-encoding the "
                         "whole file first (faster to start, no real seeking)")
-    p.add_argument("--cache-size", type=float, default=DEFAULT_LIMIT_GB, metavar="GB",
+    p.add_argument("--cache-size", type=float, default=cfg.cache_limit_gb, metavar="GB",
                    help="Keep finished conversions so the same file starts instantly "
-                        f"next time, up to this much disk (default: {DEFAULT_LIMIT_GB:g}; "
+                        f"next time, up to this much disk (default: {cfg.cache_limit_gb:g}; "
                         "0 = don't keep them)")
-    p.add_argument("--no-hwaccel", action="store_true",
+    p.add_argument("--no-hwaccel", dest="hwaccel", action="store_false",
                    help="Re-encode on the CPU even if a GPU could do it")
-    p.add_argument("--no-autoplay", action="store_true",
+    p.add_argument("--hwaccel", dest="hwaccel", action="store_true", help=argparse.SUPPRESS)
+    p.add_argument("--no-autoplay", dest="autoplay", action="store_false",
                    help="Library mode: don't start the next episode on its own")
-    p.add_argument("--no-posters", action="store_true",
+    p.add_argument("--autoplay", dest="autoplay", action="store_true", help=argparse.SUPPRESS)
+    p.add_argument("--no-posters", dest="posters", action="store_false",
                    help="Library mode: don't look up posters and links on IMDb")
+    p.add_argument("--posters", dest="posters", action="store_true", help=argparse.SUPPRESS)
+    p.set_defaults(hwaccel=cfg.hwaccel, autoplay=cfg.autoplay_next, posters=cfg.library_posters)
     p.add_argument("--no-browser", action="store_true",
                    help="Don't open the web panel automatically")
     p.add_argument("--list-devices", action="store_true",
@@ -494,7 +500,7 @@ def run(args: argparse.Namespace) -> int:
             print(f"\n  {green('✓')} {dim('using the conversion saved last time')}")
         elif not args.no_wait:
             try:
-                encoded = _encode_ahead(media, session.plan, args.no_hwaccel)
+                encoded = _encode_ahead(media, session.plan, not args.hwaccel)
             except PrepareError as exc:
                 caster.disconnect()
                 die(str(exc))
@@ -573,9 +579,9 @@ def run_library(args: argparse.Namespace) -> int:
     player = Player(caster, library, ProgressStore(), PlayOptions(
         force=force, surround=args.surround, sub_lang=args.sub_lang,
         sub_scale=args.sub_scale, sub_encoding=args.sub_encoding,
-        autoplay_next=not args.no_autoplay, hwaccel=not args.no_hwaccel,
+        autoplay_next=args.autoplay, hwaccel=args.hwaccel,
     ), cache=ConversionCache(args.cache_size),
-       posters=Posters(enabled=not args.no_posters))
+       posters=Posters(enabled=args.posters))
     http = _bind(lambda port: serve_library(player, port=port), args.port)
     ip = local_ip_towards(device.host)
     base_url = f"http://{ip}:{http.server_address[1]}"
@@ -586,11 +592,11 @@ def run_library(args: argparse.Namespace) -> int:
     print(f"  {bold('Library')}  {dim(str(root))}")
     print(f"  {dim(f'{len(library.movies)} movies · {len(library.shows)} series ({episodes} episodes)')}")
     print(f"  {dim('→')} {bold(device.name)} {dim(f'({device.model})')}")
-    hw = None if args.no_hwaccel else detect_hw_encoder()
+    hw = detect_hw_encoder() if args.hwaccel else None
     print(f"  {dim('re-encode')}  {hw.label if hw else 'CPU (x264)'}")
     print()
     print(f"  {dim('panel')}  {cyan(base_url)}  {dim('open it on your phone')}")
-    print(f"  {dim('log')}    {dim(str(LOG_PATH))}")
+    print(f"  {dim('log')}    {dim(str(config.get().log_path))}")
     print(f"  {dim(HELP)}")
     print()
 
@@ -674,12 +680,13 @@ def _bind(start_server, port: int | None):
     cualquiera libre en vez de morir: la dirección cambia, pero se avisa.
     Un puerto pedido con -p que está ocupado sí es un error.
     """
+    preferred = config.get().port
     try:
-        return start_server(DEFAULT_PORT if port is None else port)
+        return start_server(preferred if port is None else port)
     except OSError as exc:
         if port is not None:
             die(f"Can't use port {port}: {exc.strerror or exc}")
-        print(yellow(f"  Port {DEFAULT_PORT} is taken; using a random one, "
+        print(yellow(f"  Port {preferred} is taken; using a random one, "
                      "so the panel address will differ this time."))
         return start_server(0)
 
@@ -752,7 +759,7 @@ def _print_summary(session: Session, device, panel_url: str) -> None:
 
     print()
     print(f"  {dim('panel')}  {cyan(panel_url)}")
-    print(f"  {dim('log')}    {dim(str(LOG_PATH))}")
+    print(f"  {dim('log')}    {dim(str(config.get().log_path))}")
     print(f"  {dim(HELP)}")
     print()
 
@@ -761,17 +768,33 @@ def main(argv: list[str] | None = None) -> int:
     # Sin terminal (lanzado desde el gestor de archivos, o con la salida a un
     # archivo) Python junta la salida en bloques: la dirección del panel recién
     # aparecía al cerrar el programa.
-    if not _TTY:
+    if not _TTY and hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(line_buffering=True)
-    parser = build_parser()
+    argv = sys.argv[1:] if argv is None else argv
+
+    try:
+        if argv and argv[0] in COMMANDS:
+            # Se importa acá: el instalador no hace falta para castear.
+            from . import installer
+            return getattr(installer, f"cmd_{argv[0]}")(argv[1:])
+        parser = build_parser()
+    except config.ConfigError as exc:
+        die(f"{exc}\n  Fix it, or see: ltc config path")
     args = parser.parse_args(argv)
 
     try:
         if args.list_devices:
             return cmd_list_devices(args.timeout)
         if not args.video:
-            parser.print_help()
-            return 1
+            folder = config.get().library_path
+            if folder is None:
+                parser.print_help()
+                print(f"\n{dim('Tip: ltc setup picks a library folder, so plain `ltc` opens it.')}")
+                return 1
+            if not folder.is_dir():
+                die(f"The library folder from the configuration doesn't exist: {folder}\n"
+                    "  Change it with: ltc config set library.folder PATH")
+            args.video = str(folder)
         if Path(args.video).expanduser().is_dir():
             return run_library(args)
         if args.list_tracks:

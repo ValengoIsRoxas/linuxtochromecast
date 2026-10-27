@@ -35,12 +35,78 @@ them on, off, and switch languages instantly, without re-encoding anything.
 ## Installation
 
 ```bash
+git clone https://github.com/ValengoIsRoxas/linuxtochromecast
+cd linuxtochromecast
 ./install.sh
 ```
 
-It sets up the environment, puts `ltc` on your PATH, and adds a **Send to
-Chromecast** entry to your file manager's context menu. No sudo required. The
-only prerequisites are `python3` (3.10+) and `ffmpeg`.
+The script installs ltc with [pipx](https://pipx.pypa.io) (so it lives in its
+own environment and `pipx upgrade` / `pipx uninstall` work as usual), then runs
+`ltc setup`, a short guided setup where **every question has a default: press
+Enter to accept it**:
+
+- the **library folder** with your movies and series (subfolders are scanned);
+- where to keep **saved conversions** (they are big, so you may want another
+  disk) and how much space they may use, suggested from the free space;
+- the preferred **subtitle language**;
+- your **Chromecast**, found on the network, so it isn't asked every time;
+- the **port** of the panel, checking whether the firewall blocks it and offering
+  to open it;
+- whether to look up **posters** on IMDb, and optional **OpenSubtitles** credentials;
+- a **Send to Chromecast** entry in your file manager's right-click menu.
+
+Requirements are Python 3.11+, ffmpeg and pipx. If ffmpeg or pipx is missing the
+script offers to install it with your distro's package manager (dnf, apt,
+pacman or zypper); that is the only time it uses `sudo`, and only if you agree.
+
+```bash
+./install.sh --yes       # no questions, all defaults
+./install.sh --dev       # editable install: code changes apply immediately
+ltc setup                # run the guided setup again any time
+ltc uninstall            # remove ltc, and optionally its data
+```
+
+Installed with the old script (a `.venv` inside the repo)? Run `./install.sh`
+again: it replaces the old `ltc` command with the pipx one, and the repo's
+`.venv` stops being used.
+
+---
+
+## Configuration
+
+Everything `ltc setup` asks lives in `~/.config/ltc/config.toml`. You can see and
+change it without editing the file:
+
+```bash
+ltc config                             # every option, and whether you changed it
+ltc config set library.folder ~/Videos
+ltc config set storage.converted_dir /mnt/big-disk/ltc
+ltc config unset storage.cache_limit_gb    # back to the default
+ltc config edit                        # open the file in $EDITOR
+```
+
+With a library folder set, plain `ltc` opens it. Command-line options still win
+over the file, for one run.
+
+| Option | Default | |
+|---|---|---|
+| `library.folder` | none | movies and series, subfolders included |
+| `library.posters` | `true` | look up posters on IMDb |
+| `storage.cache_dir` | `~/.cache/ltc` | thumbnails, posters, log |
+| `storage.converted_dir` | `<cache_dir>/converted` | saved conversions |
+| `storage.cache_limit_gb` | `40` | disk for conversions; `0` = don't keep them |
+| `playback.sub_lang` | `spa` | preferred subtitle language |
+| `playback.sub_scale` | `1.0` | subtitle size |
+| `playback.surround` | `false` | keep multichannel audio |
+| `playback.autoplay_next` | `true` | library mode: next episode on its own |
+| `device.name` | none | Chromecast by name or IP; none = look around |
+| `network.port` | `8642` | port of the panel |
+| `performance.hwaccel` | `true` | re-encode on the GPU when there is one |
+| `opensubtitles.api_key` / `.username` / `.password` | none | see below |
+
+Changing `storage.converted_dir` offers to move the conversions already saved.
+Partial encodes are written next to the saved ones, so the final step is a rename
+on the same disk and not a copy of several gigabytes.
 
 ---
 
@@ -116,7 +182,7 @@ the artwork:
 
 - **Names.** Series are recognized by `S01E03`, `1x03`, or a `Season 1` /
   `Temporada 1` folder; anything else is a movie. Release junk (`1080p`,
-  `BluRay`, `x264`, …) is stripped from titles, and the year is kept.
+  `BluRay`, `x264`, `Criterion`, …) is stripped from titles, and the year is kept.
 - **Artwork.** Movies and series show a poster: a `poster.jpg` /
   `folder.jpg` already in the folder, or `<video>.jpg` next to the file;
   otherwise the one from IMDb (its public search, no key or account), cached
@@ -154,23 +220,27 @@ only thing in library mode that goes online, and only when you press it.
 It uses the opensubtitles.com API (the old opensubtitles.org one was shut
 down), which needs an API key to search and a free account to download:
 
-```json
-// ~/.config/ltc/opensubtitles.json
-{"api_key": "…", "username": "…", "password": "…"}
+```bash
+ltc config set opensubtitles.api_key …
+ltc config set opensubtitles.username …
+ltc config set opensubtitles.password …
 ```
 
-`LTC_OPENSUBTITLES_API_KEY`, `_USERNAME` and `_PASSWORD` work too.
+The config file is created readable only by you. `LTC_OPENSUBTITLES_API_KEY`,
+`_USERNAME` and `_PASSWORD` work too and take priority, and the old
+`~/.config/ltc/opensubtitles.json` is still read for whatever the config doesn't set.
 
 ### Saved conversions
 
 Re-encoding an HEVC episode takes minutes, so finished conversions are kept in
-`~/.cache/ltc/converted`. Next time the same file starts instantly, with real
+`~/.cache/ltc/converted` (`storage.converted_dir` changes it). Next time the same file starts instantly, with real
 seeking, in either mode. The key is the source file plus how it was
 converted, so a changed file or a different audio track never gets a stale
 conversion.
 
 The cache keeps up to 40 GB and drops whatever was used longest ago;
-`--cache-size 100` raises that, `--cache-size 0` turns it off. Remuxes aren't
+`storage.cache_limit_gb` (or `--cache-size 100` for one run) changes that, and
+`0` turns it off. Remuxes aren't
 kept: they redo in seconds and would take as much space as the original.
 
 ### Re-encoding on the GPU
@@ -307,6 +377,9 @@ ltc movie.mkv --burn 1
 
 ## Options
 
+These override the configuration for one run. Every default below is the one
+from `ltc config`.
+
 ```
   -d, --device NAME       Chromecast to use (partial name, or its IP)
   -s, --sub N|FILE        subtitle track, by number or by file
@@ -323,6 +396,8 @@ ltc movie.mkv --burn 1
       --transcode         force re-encoding
       --direct            force direct playback
       --surround          don't downmix multichannel audio to stereo
+      --no-hwaccel        re-encode on the CPU even if a GPU could do it
+      --no-autoplay       library mode: don't start the next episode on its own
       --no-posters        library mode: don't fetch posters from IMDb
       --no-browser        don't open the web panel
       --list-devices      list the Chromecasts on the network
@@ -345,11 +420,13 @@ ltc movie.mkv -d 192.168.100.13
 **Video plays but no subtitles.** Almost always CORS: the receiver fetches the
 `.vtt` over XHR and silently discards it if the `Access-Control-Allow-Origin`
 header is missing. This program always sends it, so if it happens, check that
-your firewall isn't blocking the local server's port:
+your firewall isn't blocking the local server's port. `ltc setup` checks this
+and offers to open it; by hand:
 
 ```bash
 sudo firewall-cmd --add-port=8642/tcp                 # Fedora, until reboot
 sudo firewall-cmd --add-port=8642/tcp --permanent     # and from then on
+sudo ufw allow 8642/tcp                               # Ubuntu
 ```
 
 **It starts and cuts out after a few seconds.** That's the classic multichannel
@@ -374,7 +451,11 @@ you exactly what's being converted and why.
 ./tests/make_fixtures.sh                              # generate the test videos
 .venv/bin/python tests/test_integration.py tests/media
 .venv/bin/python tests/test_library.py tests/media    # library mode
+.venv/bin/python tests/test_config.py                 # configuration and installer
 ```
+
+`test_config.py` needs no videos and touches nothing of yours: it runs against a
+temporary home.
 
 This runs the server against a simulated Chromecast and checks what actually
 matters: that HTTP ranges are correct, that subtitles are served with the right
@@ -402,6 +483,10 @@ IP — which is the only way to know the subtitles will show up.
 ```
 ltc/
 ├── cli.py          arguments, keyboard controls, terminal output
+├── config.py       the config.toml: options, defaults, reading and writing
+├── installer.py    ltc setup / config / uninstall, firewall, file manager entries
+├── integration/    ltc-open and the .desktop files that `ltc setup` installs
+├── term.py         terminal colors
 ├── caster.py       discovery and the Chromecast protocol
 ├── session.py      playback state and position translation
 ├── server.py       HTTP with Range, CORS, and the ffmpeg pipe
