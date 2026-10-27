@@ -14,7 +14,8 @@ servidores tipo Kodi/Jellyfin:
 
 Las miniaturas también son locales: primero un póster que ya esté en la carpeta
 (`poster.jpg`, `folder.jpg`, `<video>.jpg`), y si no, un cuadro del propio video
-sacado con ffmpeg y guardado en caché.
+sacado con ffmpeg y guardado en caché. Los pósters de IMDb para películas y
+series son aparte, en `posters`.
 """
 
 from __future__ import annotations

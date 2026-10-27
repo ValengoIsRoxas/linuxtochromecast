@@ -24,6 +24,7 @@ from .library import Library, ProgressStore
 from .libraryserver import serve_library
 from .logutil import LOG_PATH, setup_logging
 from .player import PlayOptions, Player
+from .posters import Posters
 from .probe import ProbeError, probe
 from .server import serve
 from .session import Session
@@ -156,6 +157,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Re-encode on the CPU even if a GPU could do it")
     p.add_argument("--no-autoplay", action="store_true",
                    help="Library mode: don't start the next episode on its own")
+    p.add_argument("--no-posters", action="store_true",
+                   help="Library mode: don't look up posters and links on IMDb")
     p.add_argument("--no-browser", action="store_true",
                    help="Don't open the web panel automatically")
     p.add_argument("--list-devices", action="store_true",
@@ -571,7 +574,8 @@ def run_library(args: argparse.Namespace) -> int:
         force=force, surround=args.surround, sub_lang=args.sub_lang,
         sub_scale=args.sub_scale, sub_encoding=args.sub_encoding,
         autoplay_next=not args.no_autoplay, hwaccel=not args.no_hwaccel,
-    ), cache=ConversionCache(args.cache_size))
+    ), cache=ConversionCache(args.cache_size),
+       posters=Posters(enabled=not args.no_posters))
     http = _bind(lambda port: serve_library(player, port=port), args.port)
     ip = local_ip_towards(device.host)
     base_url = f"http://{ip}:{http.server_address[1]}"

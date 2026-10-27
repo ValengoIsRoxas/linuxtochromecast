@@ -30,6 +30,7 @@ from ltc.library import (  # noqa: E402
 )
 from ltc.libraryserver import serve_library  # noqa: E402
 from ltc.player import PlayOptions, Player  # noqa: E402
+from ltc import posters as imdb  # noqa: E402
 from ltc import opensubtitles as osub  # noqa: E402
 from ltc.probe import probe  # noqa: E402
 
@@ -254,6 +255,93 @@ def test_thumbnails(root: Path, data: Path):
           and time.monotonic() - t0 < 0.05)
 
 
+# --- pósters -------------------------------------------------------------------
+
+JPEG = b"\xff\xd8\xff\xe0fake jpeg"
+
+# Lo que contesta el buscador de IMDb, con sus mañas: algo más popular antes que
+# el título exacto, y lo que no es película ni serie mezclado.
+IMDB = {
+    "blade runner 2049 2017": [
+        {"id": "tt7879362", "l": "Blade Runner 2049: To Be Human", "qid": "video", "y": 2018},
+        {"id": "tt1856101", "l": "Blade Runner 2049", "qid": "movie", "y": 2017,
+         "i": {"imageUrl": "https://m.media-amazon.com/images/M/br2049._V1_.jpg"}},
+    ],
+    "nueve reinas 2000": [],
+    "nueve reinas": [{"id": "tt0247586", "l": "Nine Queens", "qid": "movie", "y": 2000}],
+    "dark": [
+        {"id": "/guide/", "l": "Halloween Family Fun"},
+        {"id": "tt19231492", "l": "Dark Matter", "qid": "tvSeries", "y": 2024},
+        {"id": "tt5753856", "l": "Dark", "qid": "tvSeries", "y": 2017,
+         "i": {"imageUrl": "https://m.media-amazon.com/images/M/dark._V1_.jpg"}},
+    ],
+}
+
+
+def fake_imdb(calls: list | None = None):
+    def fetch(url: str, timeout: float = 0) -> bytes:
+        if calls is not None:
+            calls.append(url)
+        if url.startswith("https://m.media-amazon.com/"):
+            return JPEG
+        query = urllib.parse.unquote(url.rsplit("/", 1)[-1].removesuffix(".json"))
+        return json.dumps({"d": IMDB.get(query, [])}).encode()
+    return fetch
+
+
+def fake_posters(data: Path) -> imdb.Posters:
+    return imdb.Posters(data / "posters", fetch=fake_imdb())
+
+
+def test_posters(data: Path):
+    print("\n\033[1mPósters de IMDb\033[0m")
+    calls: list[str] = []
+    posters = imdb.Posters(data / "posters-test", fetch=fake_imdb(calls))
+
+    m = posters.lookup("Blade Runner 2049", 2017, "movie")
+    check("elige la película y no el video del mismo nombre",
+          m is not None and m.imdb == "tt1856101", str(m))
+    check("enlaces a IMDb y Letterboxd", m is not None
+          and m.links["letterboxd"] == "https://letterboxd.com/imdb/tt1856101/")
+    m = posters.lookup("Dark", None, "show")
+    check("el título exacto le gana al más popular", m is not None and m.imdb == "tt5753856", str(m))
+    check("una película no busca entre las series", posters.lookup("Dark", None, "movie") is None)
+    m = posters.lookup("Nueve Reinas", 2000, "movie")
+    check("si con el año no aparece, prueba sin el año",
+          m is not None and m.imdb == "tt0247586", str(m))
+    check("el año que no coincide descarta",
+          imdb.pick(IMDB["dark"], "Dark", 1990, imdb.SHOW_KINDS) is None)
+
+    image = posters.image("Blade Runner 2049", 2017, "movie")
+    check("baja el póster", image is not None and image.read_bytes() == JPEG)
+    check("y lo pide achicado", any("._V1_QL80_UX480_.jpg" in c for c in calls), calls[-1])
+    check("sin póster en IMDb no hay imagen", posters.image("Nueve Reinas", 2000, "movie") is None)
+
+    before = len(calls)
+    again = imdb.Posters(data / "posters-test", fetch=fake_imdb(calls))
+    check("lo encontrado queda en caché, también entre sesiones",
+          again.lookup("Dark", None, "show") is not None
+          and again.image("Blade Runner 2049", 2017, "movie") == image
+          and again.lookup("Dark", None, "movie") is None
+          and len(calls) == before, str(calls[before:]))
+
+    def down(url, timeout=0):
+        calls.append(url)
+        raise urllib.error.URLError("sin red")
+    offline = imdb.Posters(data / "posters-offline", fetch=down)
+    before = len(calls)
+    offline.lookup("Amélie", None, "movie")
+    offline.lookup("Ocean's Eleven", 2001, "movie")
+    check("sin red no insiste con cada tarjeta", len(calls) == before + 1, str(calls[before:]))
+    check("y no recuerda el fallo como que no existe",
+          not (data / "posters-offline" / "index.json").exists())
+
+    off = imdb.Posters(data / "posters-off", enabled=False, fetch=down)
+    before = len(calls)
+    check("--no-posters no sale a internet",
+          off.lookup("Dark", None, "show") is None and len(calls) == before)
+
+
 # --- servidor y reproducción ------------------------------------------------------
 
 def test_server(root: Path, data: Path):
@@ -263,7 +351,8 @@ def test_server(root: Path, data: Path):
     store = ProgressStore(data / "server-progress.json", save_every=0)
     cache = ConversionCache(directory=data / "converted")
     player = Player(caster, lib, store, PlayOptions(),
-                    thumbnailer=Thumbnailer(data / "thumbs"), cache=cache)
+                    thumbnailer=Thumbnailer(data / "thumbs"), cache=cache,
+                    posters=fake_posters(data))
     http = serve_library(player, host="127.0.0.1", port=0)
     base = f"http://127.0.0.1:{http.server_address[1]}"
     player.attach(http, base)
@@ -292,6 +381,23 @@ def test_server(root: Path, data: Path):
         status, headers, body = get(f"{base}/thumb/{dark.id}")
         check("miniatura de la serie", status == 200
               and headers.get("Content-Type") == "image/jpeg", headers.get("Content-Type", ""))
+
+        blade = next(m for m in lib.movies if m.year == 2017)
+        reinas = next(m for m in lib.movies if m.year == 2000)
+        status, _, body = get(f"{base}/poster/{blade.id}")
+        check("póster de la película", status == 200 and body == JPEG)
+        check("póster de la serie", get(f"{base}/poster/{dark.id}")[2] == JPEG)
+        check("sin póster en IMDb, 404 (la grilla usa un cuadro)",
+              get(f"{base}/poster/{reinas.id}")[0] == 404)
+        check("los capítulos no tienen póster",
+              get(f"{base}/poster/{dark.episodes[0].id}")[0] == 404)
+        links = json.loads(get(f"{base}/api/item/{blade.id}")[2])["links"]
+        check("el detalle trae IMDb y Letterboxd",
+              links == {"imdb": "https://www.imdb.com/title/tt1856101/",
+                        "letterboxd": "https://letterboxd.com/imdb/tt1856101/"}, str(links))
+        links = json.loads(get(f"{base}/api/item/{dark.episodes[0].id}")[2])["links"]
+        check("un capítulo enlaza a su serie",
+              (links or {}).get("imdb", "").endswith("/tt5753856/"), str(links))
 
         check("sin nada elegido no hay /media", get(base + "/media")[0] == 404)
         status, _ = post(base + "/api/cmd", {"cmd": "toggle"})
@@ -419,7 +525,8 @@ def test_failure(root: Path, data: Path):
     store = ProgressStore(data / "failure-progress.json", save_every=0)
     cache = ConversionCache(directory=data / "converted")
     player = Player(caster, lib, store, PlayOptions(),
-                    thumbnailer=Thumbnailer(data / "thumbs"), cache=cache)
+                    thumbnailer=Thumbnailer(data / "thumbs"), cache=cache,
+                    posters=fake_posters(data))
     http = serve_library(player, host="127.0.0.1", port=0)
     base = f"http://127.0.0.1:{http.server_address[1]}"
     player.attach(http, base)
@@ -584,7 +691,8 @@ def test_opensubtitles(root: Path, data: Path):
     store = ProgressStore(data / "os-progress.json", save_every=0)
     player = Player(caster, lib, store, PlayOptions(),
                     thumbnailer=Thumbnailer(data / "thumbs"),
-                    cache=ConversionCache(directory=data / "os-conv"))
+                    cache=ConversionCache(directory=data / "os-conv"),
+                    posters=fake_posters(data))
     http = serve_library(player, host="127.0.0.1", port=0)
     base = f"http://127.0.0.1:{http.server_address[1]}"
     player.attach(http, base)
@@ -652,6 +760,7 @@ if __name__ == "__main__":
         test_names()
         test_scan(root, data)
         test_thumbnails(root, data)
+        test_posters(data)
         test_cache(root, data)
         test_opensubtitles(root, data)
         test_server(root, data)

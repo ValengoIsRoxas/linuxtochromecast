@@ -106,14 +106,20 @@ track, if there's more than one), and it starts on the TV; the regular remote
 is one tap away. It remembers where you left each video, and when an episode
 ends the next one starts on its own (`--no-autoplay` turns that off).
 
-Everything comes from your own files, nothing is looked up online:
+Everything comes from your own files; the only thing looked up online is
+the artwork:
 
 - **Names.** Series are recognized by `S01E03`, `1x03`, or a `Season 1` /
   `Temporada 1` folder; anything else is a movie. Release junk (`1080p`,
   `BluRay`, `x264`, …) is stripped from titles, and the year is kept.
-- **Artwork.** A `poster.jpg` / `folder.jpg` already in the folder, or
-  `<video>.jpg` next to the file; otherwise a frame grabbed from the video and
-  cached in `~/.cache/ltc/thumbs`.
+- **Artwork.** Movies and series show a poster: a `poster.jpg` /
+  `folder.jpg` already in the folder, or `<video>.jpg` next to the file;
+  otherwise the one from IMDb (its public search, no key or account), cached
+  in `~/.cache/ltc/posters`. With no poster anywhere, a frame of the video.
+  Episodes and *Continue watching* use frames grabbed from the video, cached
+  in `~/.cache/ltc/thumbs`. `--no-posters` keeps everything offline.
+- **Links.** A movie's detail sheet links to its IMDb and Letterboxd pages;
+  an episode's, to its series on IMDb.
 - **Progress** lives in `~/.local/share/ltc/progress.json`, keyed by path.
 
 Files the Chromecast can't play as they are get converted first: **Play**
@@ -312,6 +318,7 @@ ltc movie.mkv --burn 1
       --transcode         force re-encoding
       --direct            force direct playback
       --surround          don't downmix multichannel audio to stereo
+      --no-posters        library mode: don't fetch posters from IMDb
       --no-browser        don't open the web panel
       --list-devices      list the Chromecasts on the network
       --list-tracks       list the file's tracks
@@ -403,7 +410,8 @@ ltc/
 ├── libraryserver.py  library mode: HTTP routes on top of server.py
 ├── libraryui.py    library mode: the library page
 ├── cache.py        saved conversions, and converting whole files in the background
-└── opensubtitles.py  searching and downloading subtitles from opensubtitles.com
+├── opensubtitles.py  searching and downloading subtitles from opensubtitles.com
+└── posters.py      posters and IMDb / Letterboxd links for movies and series
 ```
 
 Source comments are in Spanish.

@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from .cache import BackgroundConverter, ConversionCache, cacheable
 from .caster import Caster
 from .library import Episode, Item, Library, ProgressStore, Thumbnailer, item_json
+from .posters import Posters
 from .logutil import get_logger
 from .probe import ProbeError, probe
 from .session import Session
@@ -48,12 +49,14 @@ class Player:
     def __init__(self, caster: Caster, library: Library, store: ProgressStore,
                  options: PlayOptions | None = None,
                  thumbnailer: Thumbnailer | None = None,
-                 cache: ConversionCache | None = None):
+                 cache: ConversionCache | None = None,
+                 posters: Posters | None = None):
         self.caster = caster
         self.library = library
         self.store = store
         self.options = options or PlayOptions()
         self.thumbnailer = thumbnailer or Thumbnailer()
+        self.posters = posters or Posters()
         self.cache = cache or ConversionCache()
         self.converter = BackgroundConverter(self.cache, hwaccel=self.options.hwaccel)
         # Qué conversión en segundo plano le corresponde a cada video, para

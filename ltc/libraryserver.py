@@ -9,6 +9,7 @@ en cualquier momento, y suma las rutas de la biblioteca.
     /api/library       películas, series y "seguir viendo"
     /api/item/<id>     detalle de un video: pistas de audio y subtítulos
     /thumb/<id>        póster local o cuadro del video
+    /poster/<id>       póster local o de IMDb, de una película o serie
     /api/item/<id>/subtitles   GET busca en OpenSubtitles, POST baja uno
     /api/item/<id>/subtitle-file   POST sube un subtítulo (arrastrar y soltar)
 """
@@ -24,10 +25,14 @@ from pathlib import Path
 
 from . import libraryui, webui
 from .compat import DeviceCaps, plan_for
-from .library import Episode, Library, item_json, library_json, local_artwork
+from .library import (
+    Episode, Item, Library, Movie, Show, item_json, library_json, local_artwork,
+    parse_movie,
+)
 from .logutil import get_logger
 from .opensubtitles import OpenSubtitles, OpenSubtitlesError, api_language
 from .player import Player
+from .posters import Match
 from .probe import ProbeError, probe
 from .server import CastHTTPServer, CastRequestHandler
 from .subtitles import (
@@ -95,6 +100,8 @@ class LibraryRequestHandler(CastRequestHandler):
             self._item_detail(path.rsplit("/", 1)[-1])
         elif path.startswith("/thumb/"):
             self._thumbnail(path.rsplit("/", 1)[-1])
+        elif path.startswith("/poster/"):
+            self._poster(path.rsplit("/", 1)[-1])
         elif path == "/media" or path.startswith("/sub/"):
             # El receptor puede pedir el video viejo justo después de cambiar de
             # sesión; sin sesión no hay nada que darle.
@@ -202,6 +209,8 @@ class LibraryRequestHandler(CastRequestHandler):
                     "default": a is audio_default}
                    for i, a in enumerate(media.audio)],
         )
+        match = self._imdb(item)
+        data["links"] = match.links if match else None
         nxt = library.next_episode(item)
         data["next"] = item_json(nxt, self.player.store) if nxt else None
 
@@ -321,9 +330,38 @@ class LibraryRequestHandler(CastRequestHandler):
         if image is None:
             return self._error(404, "No thumbnail")
 
+        self._serve_image(image)
+
+    def _poster(self, target_id: str) -> None:
+        library = self.player.library
+        target = library.item(target_id) or library.show(target_id)
+        # Los capítulos no tienen póster propio: en la grilla van por cuadro.
+        if target is None or isinstance(target, Episode):
+            return self._error(404, "No such movie or series")
+        image = local_artwork(library, target)
+        if image is None:
+            title, year, kind = _imdb_query(target)
+            image = self.player.posters.image(title, year, kind)
+        if image is None:
+            return self._error(404, "No poster")
+        self._serve_image(image)
+
+    def _imdb(self, target: Item | Show) -> Match | None:
+        return self.player.posters.lookup(*_imdb_query(target))
+
+    def _serve_image(self, image: Path) -> None:
         ctype = {".png": "image/png", ".webp": "image/webp"}.get(
             image.suffix.lower(), "image/jpeg")
         self._serve_file(image, ctype)
+
+
+def _imdb_query(target: Item | Show) -> tuple[str, int | None, str]:
+    """Qué buscar en IMDb: la película, o la serie de un capítulo."""
+    if isinstance(target, Movie):
+        return target.title, target.year, "movie"
+    # El nombre de la serie sale de la carpeta y puede traer el año: "Dark (2017)".
+    title, year = parse_movie(target.name if isinstance(target, Show) else target.show)
+    return title, year, "show"
 
 
 def serve_library(player: Player, host: str = "0.0.0.0", port: int = 0) -> LibraryHTTPServer:

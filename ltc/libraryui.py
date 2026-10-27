@@ -128,6 +128,11 @@ PAGE = r"""<!doctype html>
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .card-meta.converting, .ep-meta.converting { color: var(--convert-stripe); }
 
+  /* --- posters: movies and series --- */
+  .grid.posters { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 24px 14px; }
+  @media (min-width: 760px) { .grid.posters { grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 30px 20px; } }
+  .art.poster { aspect-ratio: 2 / 3; border-radius: 8px; }
+
   .empty { color: var(--ink-dim); font-size: 14px; margin-top: 40px; max-width: 460px; }
   .empty code { font: 13px ui-monospace, Menlo, Consolas, monospace; color: var(--ink-mid); word-break: break-all; }
 
@@ -174,6 +179,16 @@ PAGE = r"""<!doctype html>
   }
   .sheet .art { border-radius: 0; border: none; aspect-ratio: 16 / 8; }
   .sheet .art .seen { display: none; }
+  .hero { display: flex; align-items: center; justify-content: center; background: #0d0d0f; }
+  .hero .backdrop { filter: blur(22px) brightness(.5) saturate(1.2); transform: scale(1.2); }
+  .hero img.cover { position: relative; width: auto; height: 84%; aspect-ratio: 2 / 3; border-radius: 6px;
+    box-shadow: 0 10px 28px -10px rgba(0, 0, 0, .7); }
+  .links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+  .ext {
+    display: inline-flex; align-items: center; gap: 7px; padding: 9px 13px; border-radius: 999px;
+    font: 500 13px/1 system-ui, sans-serif; color: var(--panel-ink-chip); background: var(--panel-alt);
+  }
+  .ext:hover { color: var(--ink-strong); }
   .sheet-body { padding: 20px 22px 0; }
   .sheet-close {
     position: absolute; top: 12px; right: 12px; width: 34px; height: 34px; border-radius: 50%;
@@ -324,6 +339,7 @@ const $ = id => document.getElementById(id);
 const PLAY = '<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M3 1.5 L12.5 7 L3 12.5 Z" fill="currentColor"/></svg>';
 const PAUSE = '<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><rect x="2.5" y="1.5" width="3" height="11" fill="currentColor"/><rect x="8.5" y="1.5" width="3" height="11" fill="currentColor"/></svg>';
 const CHECK = '<svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6.5 L5 9.2 L10 3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const EXT = '<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M3.5 1.5 H8.5 V6.5 M8.5 1.5 L1.5 8.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const CLOSE = '<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 2 L10 10 M10 2 L2 10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
 
 let lib = null, status = null, query = '';
@@ -341,12 +357,26 @@ const fold = t => String(t).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase
 function art(id, label, progress) {
   return '<div class="art">' + artInner(id, label, progress) + '</div>';
 }
-function artInner(id, label, progress) {
+function artInner(id, label, progress, img) {
   const p = progress || {};
   return '<span class="initial">' + esc((label || '?').trim().charAt(0).toUpperCase()) + '</span>'
-    + '<img loading="lazy" alt="" src="/thumb/' + id + '" onerror="this.remove()">'
+    + (img || '<img loading="lazy" alt="" src="/thumb/' + id + '" onerror="this.remove()">')
     + (p.watched ? '<span class="seen" title="Watched">' + CHECK + '</span>' : '');
 }
+// Movies and series show their poster (local or from IMDb); without one, a
+// frame of the video, like everything else.
+const noPoster = new Set();
+function poster(id, label, progress) {
+  const src = noPoster.has(id) ? '/thumb/' + id : '/poster/' + id;
+  const img = '<img loading="lazy" alt="" src="' + src + '" onerror="noPosterFor(this, \'' + id + '\')">';
+  return '<div class="art poster">' + artInner(id, label, progress, img) + '</div>';
+}
+function noPosterFor(img, id) {
+  if (img.src.includes('/thumb/')) return img.remove();
+  noPoster.add(id);
+  img.src = '/thumb/' + id;
+}
+
 // Filled in by paintBars(), so it can follow playback and conversion live.
 const meta = (id, text, cls) => '<span class="' + cls + '" data-meta="' + id + '" data-base="' + esc(text) + '">' + esc(text) + '</span>';
 const bar = id => '<div class="cbar" data-bar="' + id + '"><i class="conv" hidden></i><i class="seen-bar"></i></div>';
@@ -473,13 +503,13 @@ function renderHome() {
   }
 
   if (shows.length) {
-    html += '<div class="section-cap">Series <span class="count">' + shows.length + '</span></div><div class="grid">';
+    html += '<div class="section-cap">Series <span class="count">' + shows.length + '</span></div><div class="grid posters">';
     for (const s of shows) {
       const n = s.episodes.length;
       const meta = (s.seasons.length > 1 ? s.seasons.length + ' seasons · ' : '')
         + n + (n === 1 ? ' episode' : ' episodes')
         + (s.unwatched && s.unwatched < n ? ' · ' + s.unwatched + ' new' : '');
-      html += '<a class="card" href="#show/' + s.id + '">' + art(s.id, s.name, {watched: s.unwatched === 0})
+      html += '<a class="card" href="#show/' + s.id + '">' + poster(s.id, s.name, {watched: s.unwatched === 0})
         + '<span class="card-title">' + esc(s.name) + '</span>'
         + '<span class="card-meta">' + esc(meta) + '</span></a>';
     }
@@ -487,9 +517,9 @@ function renderHome() {
   }
 
   if (movies.length) {
-    html += '<div class="section-cap">Movies <span class="count">' + movies.length + '</span></div><div class="grid">';
+    html += '<div class="section-cap">Movies <span class="count">' + movies.length + '</span></div><div class="grid posters">';
     for (const m of movies) {
-      html += '<button class="card" data-item="' + m.id + '">' + art(m.id, m.title, m.progress) + bar(m.id)
+      html += '<button class="card" data-item="' + m.id + '">' + poster(m.id, m.title, m.progress) + bar(m.id)
         + '<span class="card-title">' + esc(m.title) + '</span>'
         + meta(m.id, [m.year, itemMeta(m)].filter(Boolean).join(' · ') || ' ', 'card-meta') + '</button>';
     }
@@ -572,7 +602,7 @@ function paintSheet() {
   const s = $('sheet');
   if (!d) return;
   const name = d.kind === 'episode' ? d.show : (d.title || '');
-  let html = '<div style="position:relative">' + art(d.id, name, d.progress)
+  let html = '<div style="position:relative">' + sheetArt(d, name)
     + '<button class="sheet-close" id="sheetClose" aria-label="Close">' + CLOSE + '</button></div>'
     + '<div class="sheet-body">';
 
@@ -597,6 +627,12 @@ function paintSheet() {
       + '<h2 class="d-title">' + esc(d.title) + '</h2>';
   }
   html += '<div class="d-meta">' + (d.duration ? esc(minutes(d.duration)) + ' · ' : '') + esc(d.file) + '</div>';
+  if (d.links) {
+    const out = (href, text) => '<a class="ext" href="' + esc(href) + '" target="_blank" rel="noopener">' + text + EXT + '</a>';
+    // For an episode, IMDb is the series' page; Letterboxd only has films.
+    html += '<div class="links">' + out(d.links.imdb, 'IMDb')
+      + (d.kind === 'movie' ? out(d.links.letterboxd, 'Letterboxd') : '') + '</div>';
+  }
 
   html += '<div class="d-cap">Subtitles</div><div class="chips">';
   for (const t of d.subs) {
@@ -643,6 +679,20 @@ function paintSheet() {
   s.innerHTML = html;
   wireSheet();
   paintWatch();
+}
+
+// A movie's sheet opens on its poster over a blurred copy of it, not on a frame.
+function sheetArt(d, name) {
+  const kind = d.kind || (itemsById[d.id] || {}).kind;
+  if (kind !== 'movie' || noPoster.has(d.id)) return art(d.id, name, d.progress);
+  return '<div class="art hero" id="hero">'
+    + '<img class="backdrop" alt="" src="/poster/' + d.id + '" onerror="heroFallback(\'' + d.id + '\')">'
+    + '<img class="cover" alt="" src="/poster/' + d.id + '"></div>';
+}
+function heroFallback(id) {
+  noPoster.add(id);
+  const hero = $('hero'), it = itemsById[id] || {};
+  if (hero) hero.outerHTML = art(id, it.title, it.progress);
 }
 
 function paintWatch() {
