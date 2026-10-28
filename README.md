@@ -414,7 +414,7 @@ the IP once with `ltc --list-devices` and then use it directly, which skips
 discovery entirely:
 
 ```bash
-ltc movie.mkv -d 192.168.100.13
+ltc movie.mkv -d 192.168.1.50
 ```
 
 **Video plays but no subtitles.** Almost always CORS: the receiver fetches the

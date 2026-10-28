@@ -342,7 +342,7 @@ def test_connection_info():
     from ltc.caster import Device, _cast_info_for, looks_like_host
 
     info = _cast_info_for(Device("TV", "Chromecast", "10.0.0.5", 8009,
-                                 "cab8ff81-4ef1-0470-67d5-6bd0a4aebb9f", "cast"))
+                                 "00000000-0000-4000-8000-000000000000", "cast"))
     check("el CastInfo lleva cast_type", bool(info.cast_type), repr(info.cast_type))
     check("apunta al host correcto",
           info.host == "10.0.0.5" and any(s.host == "10.0.0.5" for s in info.services))
@@ -351,7 +351,7 @@ def test_connection_info():
     roto = _cast_info_for(Device("TV", "Chromecast", "10.0.0.5", 8009, "", "cast"))
     check("un uuid vacío no rompe nada", roto.uuid is not None and bool(roto.cast_type))
 
-    check("reconoce una IP", looks_like_host("192.168.100.13"))
+    check("reconoce una IP", looks_like_host("192.168.1.50"))
     check("no confunde un nombre con una IP",
           not looks_like_host("Habitación principal") and not looks_like_host("TV.de.casa"))
 
