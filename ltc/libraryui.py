@@ -921,6 +921,7 @@ document.addEventListener('click', e => {
   }
   if (el.dataset.item) {
     const r = route();
+    if (r.kind !== 'item') { listScroll = window.scrollY; lastBase = r.kind + '/' + (r.id || ''); }
     sheetBase = r.kind === 'item' ? sheetBase : r;
     location.hash = 'item/' + el.dataset.item;
   } else if (el.dataset.season) {
@@ -947,16 +948,17 @@ document.addEventListener('click', e => {
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && route().kind === 'item') leaveSheet();
 });
-let lastBase = 'home/';
+let lastBase = 'home/', listScroll = 0;
 window.addEventListener('hashchange', () => {
   const r = route();
   if (r.kind === 'item') return render();
   sheetBase = r;
   render();
-  // Closing a sheet returns to the same list: keep the scroll. Only a real
-  // change of view (home <-> a show) starts at the top.
+  // Closing a sheet returns to the same list, where it was: an empty hash makes
+  // the browser jump to the top before this runs, so put the scroll back. Only
+  // a real change of view (home <-> a show) starts at the top.
   const key = r.kind + '/' + (r.id || '');
-  if (key !== lastBase) window.scrollTo(0, 0);
+  window.scrollTo(0, key === lastBase ? listScroll : 0);
   lastBase = key;
 });
 
